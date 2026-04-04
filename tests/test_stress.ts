@@ -5,41 +5,26 @@ async function runStressTest() {
 
   console.log("--- Kadak Stress & Edge Case Test ---");
 
-  const schemaMapping = {
-    users: {
-      id: "users.id",
-      tasks: "tasks.userid"
-    },
-    tasks: {
-      id: "tasks.id",
-      userid: "users.id",
-      comments: "comments.taskid"
-    },
-    comments: {
-      id: "comments.id",
-      taskid: "tasks.id",
-      author: "users.id"
-    }
-  };
-
   const db = kadak({ 
-    url: DB_URL,
-    schema: schemaMapping
+    url: DB_URL
   });
 
   const schemaDef = {
     users: {
       name: "string",
-      email: "string"
+      email: "string",
+      tasks: "tasks.userid"
     },
     tasks: {
       title: "string",
-      userid: "ref:users"
+      userid: "ref:users",
+      comments: "comments.taskid"
     },
     comments: {
       content: "text",
       taskid: "ref:tasks",
-      authorid: "ref:users"
+      authorid: "ref:users",
+      author: "users.id"
     }
   };
 
@@ -84,14 +69,15 @@ async function runStressTest() {
           author: true
         }
       }
-    });
+    }, { debug: true });
 
-    console.log(`\nResults returned: ${result.length} tasks.`);
+    console.log(`\nResults returned: ${result.data.length} tasks.`);
     
-    // Verification logic
-    const taskWithMany = result.find((t: any) => t.comments && t.comments.length === 5);
-    const taskWithNone = result.find((t: any) => t.id === taskIds[10]); 
-    const taskWithNullAuthor = result.find((t: any) => t.id === taskIds[14]);
+    // verification...
+    const resultData = result.data;
+    const taskWithMany = resultData.find((t: any) => t.comments && t.comments.length === 5);
+    const taskWithNone = resultData.find((t: any) => t.id === taskIds[10]); 
+    const taskWithNullAuthor = resultData.find((t: any) => t.id === taskIds[14]);
 
     console.log("\n--- Edge Case Verification ---");
     console.log("Task with 5 comments found:", !!taskWithMany ? "✅ Yes" : "❌ No");

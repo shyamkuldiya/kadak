@@ -8,14 +8,13 @@ import { pushSchema, SchemaDefinition } from "./schema/migrator.js";
 
 export type KadakConfig = {
   url: string;
-  schema?: Record<string, Record<string, any>>;
 };
 
 let _schema: Record<string, Record<string, any>> = {};
 let _url: string = "";
 
 export function kadak(config: KadakConfig) {
-  _schema = config.schema ?? {};
+  _schema = {};
   _url = config.url;
   return {
     schema(definition: SchemaDefinition) {
@@ -29,6 +28,8 @@ export function kadak(config: KadakConfig) {
             _schema[table][col] = `${def.ref}.id`;
           } else if (typeof def === "string" && def.startsWith("ref:")) {
             _schema[table][col] = `${def.split(":")[1]}.id`;
+          } else if (typeof def === "string" && def.includes(".")) {
+            _schema[table][col] = def;
           } else {
             _schema[table][col] = col; // It's a column
           }

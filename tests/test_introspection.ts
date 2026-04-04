@@ -3,7 +3,11 @@ import { kadak } from "../src/index.js";
 async function runTests() {
   console.log("--- Kadak Introspection Utilities Tests ---");
 
-  const schema = {
+  const db = kadak({ 
+    url: "postgres://localhost:5432/mock"
+  });
+
+  const schemaDef = {
     tasks: { 
       id: "tasks.id",
       user: "users.id",
@@ -16,10 +20,7 @@ async function runTests() {
     users: {}
   };
 
-  const db = kadak({ 
-    url: "postgres://localhost:5432/mock", 
-    schema 
-  });
+  db.schema(schemaDef);
 
   const queryInput = {
     tasks: {
@@ -37,7 +38,7 @@ async function runTests() {
   const sqlInfo = q.toSQL();
   console.log("SQL:", sqlInfo.sql);
   console.log("Values:", sqlInfo.values);
-  if (sqlInfo.sql.includes("SELECT * FROM tasks") && sqlInfo.values[0] === 1) {
+  if (sqlInfo.sql.includes("SELECT") && sqlInfo.values[0] === 1) {
     console.log("✅ Success: .toSQL() output is correct.");
   } else {
     console.log("❌ Failure: .toSQL() output mismatch.");

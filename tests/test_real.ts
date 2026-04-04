@@ -5,26 +5,8 @@ async function runRealTest() {
 
   console.log("--- Kadak Real Usage Test (NeonDB) ---");
 
-  const schemaMapping = {
-    users: {
-      id: "users.id",
-      tasks: "tasks.userid"
-    },
-    tasks: {
-      id: "tasks.id",
-      userid: "users.id",
-      comments: "comments.taskid"
-    },
-    comments: {
-      id: "comments.id",
-      taskid: "tasks.id",
-      author: "users.id"
-    }
-  };
-
   const db = kadak({ 
-    url: DB_URL,
-    schema: schemaMapping
+    url: DB_URL
   });
 
   try {
@@ -33,16 +15,19 @@ async function runRealTest() {
     await db.schema({
       users: {
         name: "string",
-        email: { type: "string", unique: true }
+        email: { type: "string", unique: true },
+        tasks: "tasks.userid" // Reverse relation
       },
       tasks: {
         title: "string",
-        userid: "ref:users"
+        userid: "ref:users",
+        comments: "comments.taskid" // Reverse relation
       },
       comments: {
         content: "text",
         taskid: "ref:tasks",
-        authorid: "ref:users"
+        authorid: "ref:users",
+        author: "users.id" // Mapping for query
       }
     }).push();
     console.log("✅ Schema pushed.");

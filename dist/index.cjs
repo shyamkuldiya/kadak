@@ -30,612 +30,402 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // src/index.ts
 var index_exports = {};
 __export(index_exports, {
-  ColumnDefSchema: () => ColumnDefSchema,
-  Compiler: () => Compiler,
-  KadakClient: () => KadakClient,
-  Planner: () => Planner,
-  QueryBuilder: () => QueryBuilder,
-  QueryInputSchema: () => QueryInputSchema,
-  RefSchema: () => RefSchema,
-  ScalarSchema: () => ScalarSchema,
-  SchemaDefSchema: () => SchemaDefSchema,
-  TableDefSchema: () => TableDefSchema,
-  analyzePlan: () => analyzePlan,
+  buildAST: () => buildAST,
+  buildPlan: () => buildPlan,
+  closePool: () => closePool,
+  compileSQL: () => compileSQL,
+  data: () => data,
   kadak: () => kadak,
-  normalizeColumn: () => normalizeColumn,
-  normalizeRows: () => normalizeRows,
-  normalizeSchema: () => normalizeSchema,
-  transaction: () => transaction,
-  validateQueryInput: () => validateQueryInput,
-  validateSchemaDef: () => validateSchemaDef
+  normalize: () => normalize,
+  runQuery: () => runQuery
 });
 module.exports = __toCommonJS(index_exports);
 
-// src/schema/normalize.ts
-function normalizeColumn(col) {
-  if (typeof col === "string") {
-    switch (col) {
-      case "string":
-        return { type: "varchar", length: 255, nullable: false, unique: false };
-      case "int":
-        return { type: "int", nullable: false, unique: false };
-      case "text":
-        return { type: "text", nullable: false, unique: false };
-      case "jsonb":
-        return { type: "jsonb", nullable: false, unique: false };
-      default:
-        throw new Error(`Unknown string shorthand for type: ${col}`);
-    }
-  }
-  if ("ref" in col) {
-    return {
-      refTable: col.ref,
-      nullable: col.nullable ?? false,
-      index: col.index ?? false,
-      unique: col.unique ?? false,
-      onDelete: col.onDelete
-    };
-  }
+// src/query/builder.ts
+function buildAST(queryInput) {
+  const rootKey = Object.keys(queryInput)[0];
+  const rootValue = queryInput[rootKey];
+  const { where, relations, orderBy } = parseNode(rootValue);
   return {
-    ...col,
-    nullable: col.nullable ?? false,
-    unique: col.unique ?? false
+    root: rootKey,
+    where: where.length > 0 ? where : void 0,
+    orderBy,
+    relations
   };
 }
-function normalizeSchema(schema) {
-  const canonical = {};
-  for (const [tableName, tableDef] of Object.entries(schema)) {
-    canonical[tableName] = {};
-    for (const [colName, colDef] of Object.entries(tableDef)) {
-      canonical[tableName][colName] = normalizeColumn(colDef);
-    }
-  }
-  return canonical;
-}
-
-// src/schema/validation.ts
-var import_zod = require("zod");
-var ScalarSchema = import_zod.z.union([
-  import_zod.z.object({ type: import_zod.z.literal("int"), nullable: import_zod.z.boolean().optional(), unique: import_zod.z.boolean().optional(), default: import_zod.z.number().optional() }),
-  import_zod.z.object({ type: import_zod.z.literal("varchar"), length: import_zod.z.number(), nullable: import_zod.z.boolean().optional(), unique: import_zod.z.boolean().optional(), default: import_zod.z.string().optional() }),
-  import_zod.z.object({ type: import_zod.z.literal("text"), nullable: import_zod.z.boolean().optional(), unique: import_zod.z.boolean().optional(), default: import_zod.z.string().optional() }),
-  import_zod.z.object({ type: import_zod.z.literal("jsonb"), nullable: import_zod.z.boolean().optional(), unique: import_zod.z.boolean().optional(), default: import_zod.z.unknown().optional() }),
-  import_zod.z.literal("string"),
-  import_zod.z.literal("int"),
-  import_zod.z.literal("text"),
-  import_zod.z.literal("jsonb")
-]);
-var RefSchema = import_zod.z.object({
-  ref: import_zod.z.string(),
-  nullable: import_zod.z.boolean().optional(),
-  index: import_zod.z.boolean().optional(),
-  unique: import_zod.z.boolean().optional(),
-  onDelete: import_zod.z.enum(["cascade", "restrict", "set null"]).optional()
-});
-var ColumnDefSchema = import_zod.z.union([ScalarSchema, RefSchema]);
-var TableDefSchema = import_zod.z.record(import_zod.z.string(), ColumnDefSchema);
-var SchemaDefSchema = import_zod.z.record(import_zod.z.string(), TableDefSchema);
-var QueryInputSchema = import_zod.z.record(import_zod.z.string(), import_zod.z.unknown());
-function validateSchemaDef(input) {
-  return SchemaDefSchema.parse(input);
-}
-function validateQueryInput(input) {
-  return QueryInputSchema.parse(input);
-}
-
-// src/schema/introspect.ts
-async function introspect(client) {
-  const schema = { tables: {} };
-  const colsRes = await client.query(`
-    SELECT table_name, column_name, data_type, is_nullable, column_default
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-  `);
-  for (const row of colsRes.rows) {
-    if (!schema.tables[row.table_name]) {
-      schema.tables[row.table_name] = { columns: {}, fks: [], indexes: [] };
-    }
-    schema.tables[row.table_name].columns[row.column_name] = {
-      type: row.data_type,
-      nullable: row.is_nullable === "YES",
-      default: row.column_default ?? void 0
-    };
-  }
-  const fksRes = await client.query(`
-    SELECT
-      tc.table_name, 
-      kcu.column_name, 
-      ccu.table_name AS foreign_table_name,
-      ccu.column_name AS foreign_column_name,
-      rc.delete_rule
-    FROM information_schema.table_constraints AS tc 
-    JOIN information_schema.key_column_usage AS kcu
-      ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-    JOIN information_schema.constraint_column_usage AS ccu
-      ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
-    JOIN information_schema.referential_constraints AS rc
-      ON tc.constraint_name = rc.constraint_name
-    WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public'
-  `);
-  for (const row of fksRes.rows) {
-    if (schema.tables[row.table_name]) {
-      schema.tables[row.table_name].fks.push({
-        column: row.column_name,
-        refTable: row.foreign_table_name,
-        refColumn: row.foreign_column_name,
-        onDelete: row.delete_rule.toLowerCase()
+function parseNode(input) {
+  const where = [];
+  const relations = [];
+  let orderBy;
+  for (const [key, value] of Object.entries(input)) {
+    if (key === "where") {
+      const whereObj = value;
+      for (const [field, val] of Object.entries(whereObj)) {
+        where.push({ field, value: val });
+      }
+    } else if (key === "orderBy") {
+      const orderObj = value;
+      const field = Object.keys(orderObj)[0];
+      const direction = orderObj[field].toLowerCase();
+      orderBy = { field, direction };
+    } else if (value === true || typeof value === "object" && value !== null) {
+      const relationInput = value === true ? {} : value;
+      const { relations: nestedRelations } = parseNode(relationInput);
+      relations.push({
+        name: key,
+        relations: nestedRelations
       });
     }
   }
-  const idxRes = await client.query(`
-    SELECT
-      t.relname as table_name,
-      i.relname as index_name,
-      a.attname as column_name,
-      ix.indisunique as is_unique
-    FROM pg_class t
-    JOIN pg_index ix ON t.oid = ix.indrelid
-    JOIN pg_class i ON i.oid = ix.indexrelid
-    JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
-    JOIN pg_namespace n ON n.oid = t.relnamespace
-    WHERE t.relkind = 'r' AND n.nspname = 'public'
-      AND i.relname NOT LIKE '%_pkey'
-  `);
-  const idxMap = {};
-  for (const row of idxRes.rows) {
-    if (!idxMap[row.table_name]) idxMap[row.table_name] = {};
-    if (!idxMap[row.table_name][row.index_name]) {
-      idxMap[row.table_name][row.index_name] = { columns: [], unique: row.is_unique };
-    }
-    idxMap[row.table_name][row.index_name].columns.push(row.column_name);
-  }
-  for (const [tableName, idxs] of Object.entries(idxMap)) {
-    if (schema.tables[tableName]) {
-      for (const [idxName, idx] of Object.entries(idxs)) {
-        schema.tables[tableName].indexes.push({
-          name: idxName,
-          columns: idx.columns,
-          unique: idx.unique
-        });
-      }
-    }
-  }
-  return schema;
+  return { where, relations, orderBy };
 }
-
-// src/schema/diff.ts
-function diffSchemas(desired, current) {
-  const ops = [];
-  for (const [tableName, tableDef] of Object.entries(desired)) {
-    const currentTable = current.tables[tableName];
-    if (!currentTable) {
-      ops.push({ type: "create_table", table: tableName });
-      ops.push({ type: "add_column", table: tableName, column: "id", def: { type: "serial", primaryKey: true } });
-    }
-    for (const [colName, colDef] of Object.entries(tableDef)) {
-      const isNewCol = !currentTable || !currentTable.columns[colName];
-      if (isNewCol) {
-        ops.push({ type: "add_column", table: tableName, column: colName, def: colDef });
-      }
-      if ("refTable" in colDef) {
-        const hasFk = currentTable?.fks.some((fk) => fk.column === colName && fk.refTable === colDef.refTable);
-        if (!hasFk) {
-          ops.push({
-            type: "add_fk",
-            table: tableName,
-            column: colName,
-            refTable: colDef.refTable,
-            refColumn: "id",
-            onDelete: colDef.onDelete
-          });
-        }
-        if (colDef.index) {
-          const hasIdx = currentTable?.indexes.some((idx) => idx.columns.includes(colName));
-          if (!hasIdx) {
-            ops.push({ type: "add_index", table: tableName, column: colName, unique: colDef.unique ?? false });
-          }
-        }
-      }
-    }
-  }
-  ops.sort((a, b) => {
-    const order = { create_table: 1, add_column: 2, add_index: 3, add_fk: 4 };
-    return order[a.type] - order[b.type];
-  });
-  return ops;
-}
-
-// src/schema/sql.ts
-function generateSQL(ops) {
-  const statements = [];
-  for (const op of ops) {
-    switch (op.type) {
-      case "create_table":
-        statements.push(`CREATE TABLE IF NOT EXISTS ${op.table} ();`);
-        break;
-      case "add_column": {
-        let typeStr = "";
-        if (op.def.type === "serial") {
-          typeStr = "SERIAL PRIMARY KEY";
-        } else if ("refTable" in op.def) {
-          typeStr = "INTEGER";
-        } else {
-          typeStr = op.def.type.toUpperCase();
-          if (op.def.length) typeStr += `(${op.def.length})`;
-        }
-        let constraints = "";
-        if (!op.def.nullable && op.def.type !== "serial") constraints += " NOT NULL";
-        if (op.def.unique) constraints += " UNIQUE";
-        if (op.def.default !== void 0) {
-          const val = typeof op.def.default === "string" ? `'${op.def.default}'` : op.def.default;
-          constraints += ` DEFAULT ${val}`;
-        }
-        statements.push(`ALTER TABLE ${op.table} ADD COLUMN ${op.column} ${typeStr}${constraints};`);
-        break;
-      }
-      case "add_fk": {
-        let sql = `ALTER TABLE ${op.table} ADD CONSTRAINT fk_${op.table}_${op.column} FOREIGN KEY (${op.column}) REFERENCES ${op.refTable}(${op.refColumn})`;
-        if (op.onDelete) {
-          sql += ` ON DELETE ${op.onDelete.toUpperCase()}`;
-        }
-        statements.push(sql + ";");
-        break;
-      }
-      case "add_index": {
-        const uniqueStr = op.unique ? "UNIQUE " : "";
-        statements.push(`CREATE ${uniqueStr}INDEX idx_${op.table}_${op.column} ON ${op.table}(${op.column});`);
-        break;
-      }
-    }
-  }
-  return statements;
-}
-
-// src/query/builder.ts
-var QueryBuilder = class {
-  constructor(schema = {}) {
-    this.schema = schema;
-  }
-  schema;
-  aliasCounter = 0;
-  getAlias() {
-    return `t${this.aliasCounter++}`;
-  }
-  buildWhere(whereObj) {
-    const predicates = [];
-    for (const [key, value] of Object.entries(whereObj)) {
-      predicates.push({ op: "eq", column: key, value });
-    }
-    return predicates;
-  }
-  buildAST(rootTable, queryInput) {
-    const rootNode = this.parseNode(rootTable, queryInput[rootTable]);
-    return { root: rootNode };
-  }
-  parseNode(tableName, input) {
-    const alias = this.getAlias();
-    const relations = [];
-    let where;
-    let limit;
-    let orderBy;
-    for (const [key, value] of Object.entries(input)) {
-      if (key === "where") {
-        where = this.buildWhere(value);
-      } else if (key === "limit") {
-        limit = value;
-      } else if (key === "orderBy") {
-        orderBy = Object.entries(value).map(([col, dir]) => ({
-          column: col,
-          dir
-        }));
-      } else {
-        const relationInput = value === true ? {} : value;
-        relations.push(this.parseNode(key, relationInput));
-      }
-    }
-    return {
-      table: tableName,
-      alias,
-      where,
-      limit,
-      orderBy,
-      relations,
-      selectAll: true
-    };
-  }
-};
 
 // src/query/planner.ts
-var Planner = class {
-  constructor(schema = {}) {
-    this.schema = schema;
-  }
-  schema;
-  plan(astRoot) {
-    const plan = {
-      from: { table: astRoot.table, alias: astRoot.alias },
-      joins: [],
-      where: [],
-      select: [],
-      limit: astRoot.limit,
-      orderBy: astRoot.orderBy
-    };
-    this.traverse(astRoot, plan);
-    return plan;
-  }
-  traverse(node, plan, parentAlias, parentTable) {
-    plan.select.push({ table: node.table, tableAlias: node.alias, selectAll: node.selectAll });
-    if (node.where) {
-      for (const p of node.where) {
-        if (p.op === "eq") {
-          plan.where.push({ ...p, column: `${node.alias}.${p.column}` });
-        } else {
-          plan.where.push(p);
-        }
-      }
+function buildPlan(ast, schema) {
+  const plan = {
+    from: ast.root,
+    joins: [],
+    where: ast.where,
+    orderBy: ast.orderBy
+  };
+  traverse(ast.root, ast.relations, plan, schema);
+  return plan;
+}
+function traverse(parentTableOrAlias, relations, plan, schema) {
+  for (const rel of relations) {
+    const parentTable = findTable(parentTableOrAlias, plan);
+    const target = schema[parentTable]?.[rel.name];
+    if (!target) {
+      throw new Error(`Invalid relation: ${rel.name} not found on ${parentTable}`);
     }
-    if (parentAlias && parentTable) {
-      const onCondition = {
-        left: `${parentAlias}.id`,
-        right: `${node.alias}.${parentTable.slice(0, -1)}_id`
-      };
-      plan.joins.push({
-        type: "left",
-        table: node.table,
-        alias: node.alias,
-        on: [onCondition]
-      });
+    const [targetTable, targetField] = target.split(".");
+    const alias = rel.name !== targetTable ? rel.name : void 0;
+    const targetIdentifier = alias || targetTable;
+    let onCondition;
+    if (targetField === "id") {
+      onCondition = [`${parentTableOrAlias}.${rel.name}id`, `${targetIdentifier}.${targetField}`];
+    } else {
+      onCondition = [`${targetIdentifier}.${targetField}`, `${parentTableOrAlias}.id`];
     }
-    for (const relation of node.relations) {
-      this.traverse(relation, plan, node.alias, node.table);
-    }
+    plan.joins.push({
+      table: targetTable,
+      alias,
+      on: onCondition
+    });
+    traverse(targetIdentifier, rel.relations, plan, schema);
   }
-};
+}
+function findTable(id, plan) {
+  if (id === plan.from) return id;
+  const join = plan.joins.find((j) => (j.alias || j.table) === id);
+  return join ? join.table : id;
+}
 
 // src/query/compiler.ts
-var Compiler = class {
-  constructor(schema = {}) {
-    this.schema = schema;
+function compileSQL(plan, schema) {
+  const values = [];
+  const selections = [];
+  const addTableColumns = (tableName, alias) => {
+    const tableId = alias || tableName;
+    const tableSchema = schema[tableName] || {};
+    selections.push(`${tableId}.id AS ${tableId}__id`);
+    for (const [field, mapping] of Object.entries(tableSchema)) {
+      if (field === "id") continue;
+      if (typeof mapping === "string" && mapping.includes(".")) continue;
+      selections.push(`${tableId}."${field}" AS ${tableId}__${field}`);
+    }
+  };
+  addTableColumns(plan.from);
+  for (const join of plan.joins) {
+    addTableColumns(join.table, join.alias);
   }
-  schema;
-  compile(plan) {
-    const values = [];
-    let sql = "SELECT ";
-    const selectFields = [];
-    for (const s of plan.select) {
-      const tableDef = this.schema[s.table];
-      if (tableDef) {
-        selectFields.push(`${s.tableAlias}.id AS ${s.tableAlias}__id`);
-        for (const colName of Object.keys(tableDef)) {
-          if (colName === "id") continue;
-          selectFields.push(`${s.tableAlias}.${colName} AS ${s.tableAlias}__${colName}`);
-        }
-      } else {
-        selectFields.push(`${s.tableAlias}.*`);
-      }
-    }
-    sql += selectFields.join(", ") + "\n";
-    sql += `FROM ${plan.from.table} ${plan.from.alias}
+  let sql = `SELECT ${selections.join(", ")} FROM ${plan.from}
 `;
-    for (const join of plan.joins) {
-      const onClauses = join.on.map((c) => `${c.left} = ${c.right}`).join(" AND ");
-      sql += `LEFT JOIN ${join.table} ${join.alias} ON ${onClauses}
+  for (const join of plan.joins) {
+    const aliasStr = join.alias ? ` ${join.alias}` : "";
+    const [onLeft, onRight] = join.on.map((part) => {
+      const [table, field] = part.split(".");
+      return `${table}."${field}"`;
+    });
+    sql += `LEFT JOIN ${join.table}${aliasStr} ON ${onRight} = ${onLeft}
 `;
-    }
-    if (plan.where.length > 0) {
-      const whereClauses = plan.where.map((p) => {
-        if (p.op === "eq") {
-          values.push(p.value);
-          return `${p.column} = $${values.length}`;
-        }
-        return "";
-      }).filter(Boolean).join(" AND ");
-      if (whereClauses) {
-        sql += `WHERE ${whereClauses}
-`;
-      }
-    }
-    if (plan.orderBy && plan.orderBy.length > 0) {
-      const orders = plan.orderBy.map((o) => `${plan.from.alias}.${o.column} ${o.dir.toUpperCase()}`).join(", ");
-      sql += `ORDER BY ${orders}
-`;
-    }
-    if (plan.limit) {
-      sql += `LIMIT ${plan.limit}
-`;
-    }
-    return { text: sql.trim(), values };
   }
-};
+  if (plan.where && plan.where.length > 0) {
+    const whereClauses = plan.where.map((p) => {
+      values.push(p.value);
+      return `${plan.from}."${p.field}" = $${values.length}`;
+    }).join(" AND ");
+    sql += `WHERE ${whereClauses}
+`;
+  }
+  if (plan.orderBy) {
+    sql += `ORDER BY ${plan.from}."${plan.orderBy.field}" ${plan.orderBy.direction.toUpperCase()}
+`;
+  }
+  return { text: sql.trim(), values };
+}
 
 // src/exec/client.ts
 var import_pg = __toESM(require("pg"), 1);
-var KadakClient = class {
-  pool;
-  constructor(connectionString) {
-    this.pool = new import_pg.default.Pool({ connectionString });
+var pool = null;
+async function runQuery(sql, values, url) {
+  if (!pool && url) {
+    pool = new import_pg.default.Pool({ connectionString: url });
   }
-  async execute(compiled) {
-    const res = await this.pool.query(compiled.text, compiled.values);
-    return res.rows;
-  }
-  async explain(compiled) {
-    const explainSql = `EXPLAIN ANALYZE ${compiled.text}`;
-    const res = await this.pool.query(explainSql, compiled.values);
-    return res.rows;
-  }
-  async getClient() {
-    return await this.pool.connect();
-  }
-  async close() {
-    await this.pool.end();
-  }
-};
-
-// src/exec/tx.ts
-async function transaction(client, callback) {
-  const tx = await client.getClient();
-  try {
-    await tx.query("BEGIN");
-    const result = await callback(tx);
-    await tx.query("COMMIT");
-    return result;
-  } catch (e) {
-    await tx.query("ROLLBACK");
-    throw e;
-  } finally {
-    tx.release();
-  }
+  if (!pool) throw new Error("Database pool not initialized");
+  const res = await pool.query(sql, values);
+  return res.rows;
 }
-
-// src/analyzer/rules.ts
-function analyzePlan(plan) {
-  const warnings = [];
-  if (plan.joins.length > 1) {
-    warnings.push({
-      type: "warning",
-      message: `High fan-out detected on query starting at '${plan.from.table}'. Multiple joins may cause row explosion.`,
-      suggestion: "Consider paginating relations or splitting queries."
-    });
+async function closePool() {
+  if (pool) {
+    await pool.end();
+    pool = null;
   }
-  for (const join of plan.joins) {
-    for (const cond of join.on) {
-      warnings.push({
-        type: "warning",
-        message: `Foreign key used in JOIN on ${join.table}: ${cond.right}`,
-        suggestion: `Ensure there is an index on ${cond.right} to avoid full table scans.`
-      });
-    }
-  }
-  return warnings;
 }
 
 // src/exec/normalize.ts
-function normalizeRows(rows, ast) {
-  const root = ast.root;
-  const store = {};
-  const initializeMaps = (node) => {
-    store[node.alias] = /* @__PURE__ */ new Map();
-    for (const rel of node.relations) {
-      initializeMaps(rel);
-    }
-  };
-  initializeMaps(root);
+function normalize(rows, ast, schema) {
+  const rootMap = /* @__PURE__ */ new Map();
+  const results = [];
+  const rootPrefix = `${ast.root}__`;
   for (const row of rows) {
-    processNode(root, row, store);
+    const id = row[`${rootPrefix}id`];
+    if (id === null || id === void 0) continue;
+    let rootObj = rootMap.get(id);
+    if (!rootObj) {
+      rootObj = { id };
+      for (const [key, val] of Object.entries(row)) {
+        if (key.startsWith(rootPrefix) && key !== `${rootPrefix}id`) {
+          rootObj[key.replace(rootPrefix, "")] = val;
+        }
+      }
+      rootMap.set(id, rootObj);
+      results.push(rootObj);
+    }
+    processRelations(ast.root, rootObj, row, ast.relations, schema);
   }
-  return Array.from(store[root.alias].values());
+  return results;
 }
-function processNode(node, row, store) {
-  const prefix = `${node.alias}__`;
-  const id = row[`${prefix}id`];
-  if (id === null || id === void 0) return void 0;
-  let obj = store[node.alias].get(id);
-  if (!obj) {
-    obj = { id };
-    for (const [key, val] of Object.entries(row)) {
-      if (key.startsWith(prefix)) {
-        obj[key.replace(prefix, "")] = val;
+function processRelations(parentTable, parentObj, row, relations, schema) {
+  for (const rel of relations) {
+    const target = schema[parentTable]?.[rel.name];
+    if (!target) continue;
+    const [targetTable, targetField] = target.split(".");
+    const isOneToMany = targetField !== "id";
+    const prefix = `${rel.name}__`;
+    const relId = row[`${prefix}id`];
+    if (relId === null || relId === void 0) {
+      if (!parentObj.hasOwnProperty(rel.name)) {
+        parentObj[rel.name] = isOneToMany ? [] : null;
+      }
+      continue;
+    }
+    let relObj;
+    if (isOneToMany) {
+      if (!parentObj[rel.name]) parentObj[rel.name] = [];
+      relObj = parentObj[rel.name].find((item) => item.id === relId);
+    } else {
+      relObj = parentObj[rel.name];
+    }
+    if (!relObj) {
+      relObj = { id: relId };
+      for (const [key, val] of Object.entries(row)) {
+        if (key.startsWith(prefix) && key !== `${prefix}id`) {
+          relObj[key.replace(prefix, "")] = val;
+        }
+      }
+      if (isOneToMany) {
+        parentObj[rel.name].push(relObj);
+      } else {
+        parentObj[rel.name] = relObj;
       }
     }
-    store[node.alias].set(id, obj);
+    if (rel.relations.length > 0) {
+      processRelations(targetTable, relObj, row, rel.relations, schema);
+    }
   }
-  for (const rel of node.relations) {
-    const relObj = processNode(rel, row, store);
-    if (relObj) {
-      const relName = rel.table;
-      if (!obj[relName]) obj[relName] = [];
-      const children = obj[relName];
-      if (!children.some((item) => item.id === relObj.id)) {
-        children.push(relObj);
+}
+
+// src/schema/validator.ts
+function validateInput(input, schema) {
+  if (Object.keys(input).length === 0) {
+    throw new Error("Input cannot be empty");
+  }
+  const rootTable = Object.keys(input)[0];
+  if (!schema[rootTable] && rootTable !== "where") {
+    throw new Error(`Missing schema mapping for table: ${rootTable}`);
+  }
+  validateNode(rootTable, input[rootTable], schema);
+}
+function validateNode(tableName, nodeInput, schema) {
+  const tableSchema = schema[tableName] || {};
+  for (const [key, value] of Object.entries(nodeInput)) {
+    if (key === "where") {
+      const whereObj = value;
+      for (const field of Object.keys(whereObj)) {
+        if (field !== "id" && !tableSchema[field]) {
+          throw new Error(`Invalid where field: ${field} not found on ${tableName}`);
+        }
+      }
+    } else if (key === "limit" || key === "orderBy") {
+      continue;
+    } else {
+      const target = tableSchema[key];
+      if (!target) {
+        throw new Error(`Invalid relation: ${key} not found on ${tableName}`);
+      }
+      if (typeof value === "object" && value !== null) {
+        const [targetTable] = target.split(".");
+        validateNode(targetTable, value, schema);
       }
     }
   }
-  return obj;
+}
+
+// src/schema/migrator.ts
+function buildSchemaSQL(definition) {
+  const statements = [];
+  const indexStatements = [];
+  for (const [tableName, columns] of Object.entries(definition)) {
+    const colDefs = ["id SERIAL PRIMARY KEY"];
+    const fkDefs = [];
+    for (const [colName, def] of Object.entries(columns)) {
+      let typeStr = "";
+      let constraints = "";
+      let refTable = "";
+      let onDelete = "";
+      const isObject = typeof def === "object" && def !== null;
+      const shorthand = typeof def === "string" ? def : "";
+      if (shorthand === "string" || isObject && def.type === "string") {
+        typeStr = "VARCHAR(255)";
+      } else if (isObject && def.type === "varchar") {
+        typeStr = `VARCHAR(${def.length || 255})`;
+      } else if (shorthand === "int" || isObject && def.type === "int") {
+        typeStr = "INTEGER";
+      } else if (shorthand === "text" || isObject && def.type === "text") {
+        typeStr = "TEXT";
+      } else if (shorthand === "jsonb" || isObject && def.type === "jsonb") {
+        typeStr = "JSONB";
+      } else if (shorthand.startsWith("ref:")) {
+        refTable = shorthand.split(":")[1];
+        typeStr = "INTEGER";
+      } else if (isObject && def.ref) {
+        refTable = def.ref;
+        typeStr = "INTEGER";
+        onDelete = def.onDelete ? ` ON DELETE ${def.onDelete.toUpperCase()}` : "";
+      }
+      if (isObject) {
+        if (def.unique) constraints += " UNIQUE";
+        if (def.nullable === false) constraints += " NOT NULL";
+        if (def.default !== void 0) {
+          const val = typeof def.default === "string" ? `'${def.default}'` : def.default;
+          constraints += ` DEFAULT ${val}`;
+        }
+        if (def.index) {
+          indexStatements.push(`CREATE INDEX IF NOT EXISTS idx_${tableName}_${colName} ON ${tableName}("${colName}");`);
+        }
+      }
+      if (typeStr) {
+        colDefs.push(`"${colName}" ${typeStr}${constraints}`);
+      }
+      if (refTable) {
+        fkDefs.push(`FOREIGN KEY ("${colName}") REFERENCES ${refTable}(id)${onDelete}`);
+      }
+    }
+    const allDefs = [...colDefs, ...fkDefs];
+    statements.push(`CREATE TABLE IF NOT EXISTS ${tableName} (
+  ${allDefs.join(",\n  ")}
+);`);
+  }
+  return [...statements, ...indexStatements];
+}
+async function pushSchema(definition, url) {
+  const statements = buildSchemaSQL(definition);
+  for (const sql of statements) {
+    await runQuery(sql, [], url);
+  }
 }
 
 // src/index.ts
+var _schema = {};
+var _url = "";
 function kadak(config) {
-  const client = new KadakClient(config.url);
-  let normalizedSchema = {};
+  _schema = {};
+  _url = config.url;
   return {
-    schema(userSchema) {
-      const validated = validateSchemaDef(userSchema);
-      normalizedSchema = normalizeSchema(validated);
-      return {
-        async push() {
-          await transaction(client, async (tx) => {
-            const currentDbSchema = await introspect(tx);
-            const ops = diffSchemas(normalizedSchema, currentDbSchema);
-            const statements = generateSQL(ops);
-            for (const sql of statements) {
-              await tx.query(sql);
-            }
-          });
+    schema(definition) {
+      for (const [table, cols] of Object.entries(definition)) {
+        if (!_schema[table]) _schema[table] = {};
+        for (const [col, def] of Object.entries(cols)) {
+          if (typeof def === "object" && def !== null && def.ref) {
+            _schema[table][col] = `${def.ref}.id`;
+          } else if (typeof def === "string" && def.startsWith("ref:")) {
+            _schema[table][col] = `${def.split(":")[1]}.id`;
+          } else if (typeof def === "string" && def.includes(".")) {
+            _schema[table][col] = def;
+          } else {
+            _schema[table][col] = col;
+          }
         }
-      };
-    },
-    data(queryInput) {
-      const validatedQuery = validateQueryInput(queryInput);
-      const rootTable = Object.keys(validatedQuery)[0];
-      const qBuilder = new QueryBuilder(normalizedSchema);
-      const ast = qBuilder.buildAST(rootTable, validatedQuery);
-      const planner = new Planner(normalizedSchema);
-      const plan = planner.plan(ast.root);
-      const compiler = new Compiler(normalizedSchema);
-      const compiled = compiler.compile(plan);
-      const warnings = analyzePlan(plan);
-      if (warnings.length > 0) {
-        console.warn("Kadak Analyzer Warnings:");
-        warnings.forEach((w) => console.warn(`\u26A0\uFE0F  ${w.message}
-   Suggestion: ${w.suggestion}`));
       }
-      const executor = {
-        async execute() {
-          const rows = await client.execute(compiled);
-          return normalizeRows(rows, ast);
-        },
-        toSQL() {
-          return compiled;
-        },
-        async explain() {
-          return await client.explain(compiled);
+      return {
+        push: async () => {
+          await pushSchema(definition, _url);
         }
       };
-      const promise = executor.execute();
-      promise.toSQL = () => executor.toSQL();
-      promise.explain = () => executor.explain();
-      return promise;
     },
-    async tx(callback) {
-      return transaction(client, async (txClient) => {
-        return callback(txClient);
-      });
-    },
-    async close() {
-      await client.close();
-    }
+    data,
+    close: closePool
   };
+}
+function data(input, options = {}) {
+  validateInput(input, _schema);
+  const ast = buildAST(input);
+  const plan = buildPlan(ast, _schema);
+  const { text: sql, values } = compileSQL(plan, _schema);
+  const execution = async () => {
+    let rows = [];
+    try {
+      rows = await runQuery(sql, values, _url);
+    } catch (e) {
+      if (options.debug) console.error("Execution failed:", e.message);
+      rows = [];
+    }
+    const normalized = normalize(rows, ast, _schema);
+    if (options.debug) {
+      return {
+        sql,
+        values,
+        rows,
+        data: normalized
+      };
+    }
+    return normalized;
+  };
+  const promise = execution();
+  const queryObj = promise;
+  queryObj.toSQL = () => ({ sql, values });
+  queryObj.explain = async () => {
+    const explainSql = `EXPLAIN ANALYZE ${sql}`;
+    return await runQuery(explainSql, values, _url);
+  };
+  queryObj.trace = () => ({
+    ast,
+    plan,
+    sql,
+    values
+  });
+  return queryObj;
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  ColumnDefSchema,
-  Compiler,
-  KadakClient,
-  Planner,
-  QueryBuilder,
-  QueryInputSchema,
-  RefSchema,
-  ScalarSchema,
-  SchemaDefSchema,
-  TableDefSchema,
-  analyzePlan,
+  buildAST,
+  buildPlan,
+  closePool,
+  compileSQL,
+  data,
   kadak,
-  normalizeColumn,
-  normalizeRows,
-  normalizeSchema,
-  transaction,
-  validateQueryInput,
-  validateSchemaDef
+  normalize,
+  runQuery
 });
 //# sourceMappingURL=index.cjs.map

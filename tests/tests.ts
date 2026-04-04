@@ -4,27 +4,34 @@ import { normalize } from "../src/exec/normalize.js";
 async function runTests() {
   console.log("--- Kadak Integration & Normalization Tests ---");
 
-  const schema = {
+  const schemaDef = {
     tasks: { 
+      id: "tasks.id",
+      title: "tasks.title",
       user: "users.id",
       comments: "comments.task_id"
     },
     comments: {
+      id: "comments.id",
+      content: "comments.content",
       author: "users.id"
     },
-    users: {}
+    users: {
+      id: "users.id",
+      name: "users.name"
+    }
   };
 
   const db = kadak({ 
-    url: "postgres://localhost:5432/mock", 
-    schema 
+    url: "postgres://localhost:5432/mock"
   });
+
+  db.schema(schemaDef);
 
   // 1. Simple query
   console.log("\n1. Simple Query Test:");
   const q1 = await db.data({ tasks: { user: true } }, { debug: true });
   console.log("SQL:", q1.sql);
-  console.log("Data (empty mock):", q1.data);
 
   // 2. Nested query
   console.log("\n2. Nested Query Test:");
@@ -58,17 +65,22 @@ async function runTests() {
   });
   const mockRows = [
     { 
-      id: 1, title: "Task 1", 
-      comments_id: 101, comments_content: "Comment 1", 
-      author_id: 50, author_name: "Alice" 
+      tasks__id: 1, tasks__title: "Task 1", 
+      comments__id: 101, comments__content: "Comment 1", 
+      author__id: 50, author__name: "Alice" 
     },
     { 
-      id: 1, title: "Task 1", 
-      comments_id: 102, comments_content: "Comment 2", 
-      author_id: 60, author_name: "Bob" 
+      tasks__id: 1, tasks__title: "Task 1", 
+      comments__id: 102, comments__content: "Comment 2", 
+      author__id: 60, author__name: "Bob" 
     }
   ];
-  const normalized = normalize(mockRows, mockAST, schema);
+  // Internal schema mapping for normalization
+  const schemaMapping = {
+    tasks: { comments: "comments.task_id" },
+    comments: { author: "users.id" }
+  };
+  const normalized = normalize(mockRows, mockAST, schemaMapping);
   console.log("Normalized Output:", JSON.stringify(normalized, null, 2));
 
   if (normalized.length === 1 && normalized[0].comments.length === 2 && normalized[0].comments[0].author.id === 50) {

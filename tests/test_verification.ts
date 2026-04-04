@@ -3,13 +3,13 @@ import { kadak } from "../src/index.js";
 async function runVerification() {
   const DB_URL = process.env.DATABASE_URL || "postgres://localhost:5432/mock";
 
-  const schemaMapping = {
-    users: { id: "users.id", tasks: "tasks.userid" },
-    tasks: { id: "tasks.id", userid: "users.id", comments: "comments.taskid" },
-    comments: { id: "comments.id", taskid: "tasks.id", author: "users.id" }
-  };
+  const db = kadak({ url: DB_URL });
 
-  const db = kadak({ url: DB_URL, schema: schemaMapping });
+  db.schema({
+    users: { id: "users.id", tasks: "tasks.userid" },
+    tasks: { id: "tasks.id", userid: "ref:users", comments: "comments.taskid" },
+    comments: { id: "comments.id", taskid: "ref:tasks", author: "users.id" }
+  });
 
   console.log("\n🚀 KADAK MANUAL VERIFICATION VIEW\n" + "=".repeat(40));
 

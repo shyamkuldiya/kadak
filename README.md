@@ -21,11 +21,14 @@ npm install @shyk/kadak
 import { kadak } from "@shyk/kadak"
 
 const db = kadak({ 
-  url: "postgres://...",
-  schema: {
-    tasks: { id: "tasks.id", title: "tasks.title" }
-  }
+  url: "postgres://..."
 })
+
+await db.schema({
+  tasks: {
+    title: "string"
+  }
+}).push()
 
 const tasks = await db.data({
   tasks: {
@@ -69,7 +72,7 @@ await db.data({
 ```
 
 #### Nesting
-Fetch related data defined in your schema mapping.
+Fetch related data defined in your schema.
 ```typescript
 await db.data({
   posts: {

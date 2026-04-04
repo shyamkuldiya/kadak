@@ -3,11 +3,15 @@ import { kadak } from "../src/index.js";
 async function runTests() {
   console.log("--- Kadak Error Handling Tests ---");
 
-  const schema = {
+  const db = kadak({ 
+    url: "postgres://localhost:5432/mock"
+  });
+
+  const schemaDef = {
     tasks: { 
-      id: "tasks.id", // Added column mapping for validation
+      id: "tasks.id",
       user: "users.id",
-      comments: "comments.task_id"
+      comments: "comments.taskid"
     },
     comments: {
       id: "comments.id",
@@ -18,10 +22,8 @@ async function runTests() {
     }
   };
 
-  const db = kadak({ 
-    url: "postgres://localhost:5432/mock", 
-    schema 
-  });
+  // Pre-load schema for validation
+  db.schema(schemaDef);
 
   // 1. Invalid relation
   console.log("\n1. Invalid Relation Test:");
