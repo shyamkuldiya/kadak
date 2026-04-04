@@ -304,82 +304,71 @@ async function pushSchema(definition, url) {
 }
 
 // src/index.ts
-var _schema = {};
-var _url = "";
 function kadak(config) {
-  _schema = {};
-  _url = config.url;
-  return {
+  let _currentSchema = {};
+  const _url = config.url;
+  const data = (input, options = {}) => {
+    validateInput(input, _currentSchema);
+    const ast = buildAST(input);
+    const plan = buildPlan(ast, _currentSchema);
+    const { text: sql, values } = compileSQL(plan, _currentSchema);
+    const execution = async () => {
+      let rows = [];
+      try {
+        rows = await runQuery(sql, values, _url);
+      } catch (e) {
+        if (options.debug) console.error("Execution failed:", e.message);
+        rows = [];
+      }
+      const normalized = normalize(rows, ast, _currentSchema);
+      return options.debug ? { sql, values, rows, data: normalized } : normalized;
+    };
+    const promise = execution();
+    const queryObj = promise;
+    queryObj.toSQL = () => ({ sql, values });
+    queryObj.explain = async () => {
+      const explainSql = `EXPLAIN ANALYZE ${sql}`;
+      return await runQuery(explainSql, values, _url);
+    };
+    queryObj.trace = () => ({ ast, plan, sql, values });
+    return queryObj;
+  };
+  const instance = {
     schema(definition) {
       for (const [table, cols] of Object.entries(definition)) {
-        if (!_schema[table]) _schema[table] = {};
+        if (!_currentSchema[table]) _currentSchema[table] = {};
         for (const [col, def] of Object.entries(cols)) {
           if (typeof def === "object" && def !== null && def.ref) {
-            _schema[table][col] = `${def.ref}.id`;
+            _currentSchema[table][col] = `${def.ref}.id`;
           } else if (typeof def === "string" && def.startsWith("ref:")) {
-            _schema[table][col] = `${def.split(":")[1]}.id`;
+            _currentSchema[table][col] = `${def.split(":")[1]}.id`;
           } else if (typeof def === "string" && def.includes(".")) {
-            _schema[table][col] = def;
+            _currentSchema[table][col] = def;
           } else {
-            _schema[table][col] = col;
+            _currentSchema[table][col] = col;
           }
         }
       }
-      return {
+      const pushObj = {
         push: async () => {
+          if (process.env.NODE_ENV === "production") {
+            console.warn("\u26A0\uFE0F [Kadak] push() called in production. Ensure this is intentional.");
+          }
           await pushSchema(definition, _url);
         }
       };
+      return Object.assign(instance, pushObj);
     },
     data,
     close: closePool
   };
-}
-function data(input, options = {}) {
-  validateInput(input, _schema);
-  const ast = buildAST(input);
-  const plan = buildPlan(ast, _schema);
-  const { text: sql, values } = compileSQL(plan, _schema);
-  const execution = async () => {
-    let rows = [];
-    try {
-      rows = await runQuery(sql, values, _url);
-    } catch (e) {
-      if (options.debug) console.error("Execution failed:", e.message);
-      rows = [];
-    }
-    const normalized = normalize(rows, ast, _schema);
-    if (options.debug) {
-      return {
-        sql,
-        values,
-        rows,
-        data: normalized
-      };
-    }
-    return normalized;
-  };
-  const promise = execution();
-  const queryObj = promise;
-  queryObj.toSQL = () => ({ sql, values });
-  queryObj.explain = async () => {
-    const explainSql = `EXPLAIN ANALYZE ${sql}`;
-    return await runQuery(explainSql, values, _url);
-  };
-  queryObj.trace = () => ({
-    ast,
-    plan,
-    sql,
-    values
-  });
-  return queryObj;
+  return instance;
 }
 export {
   buildAST,
   buildPlan,
   closePool,
   compileSQL,
-  data,
   kadak,
   normalize,
   runQuery

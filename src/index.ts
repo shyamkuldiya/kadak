@@ -10,106 +10,101 @@ export type KadakConfig = {
   url: string;
 };
 
-let _schema: Record<string, Record<string, any>> = {};
-let _url: string = "";
-
-export function kadak(config: KadakConfig) {
-  _schema = {};
-  _url = config.url;
-  return {
-    schema(definition: SchemaDefinition) {
-      // Store the definition for both migrator and query selection
-      // We merge it into _schema so compileSQL can see the columns
-      for (const [table, cols] of Object.entries(definition)) {
-        if (!_schema[table]) _schema[table] = {};
-        for (const [col, def] of Object.entries(cols)) {
-          // If it's a ref, the query engine needs the mapping
-          if (typeof def === "object" && def !== null && def.ref) {
-            _schema[table][col] = `${def.ref}.id`;
-          } else if (typeof def === "string" && def.startsWith("ref:")) {
-            _schema[table][col] = `${def.split(":")[1]}.id`;
-          } else if (typeof def === "string" && def.includes(".")) {
-            _schema[table][col] = def;
-          } else {
-            _schema[table][col] = col; // It's a column
-          }
-        }
-      }
-      return {
-        push: async () => {
-          await pushSchema(definition, _url);
-        }
-      };
-    },
-    data,
-    close: closePool
-  };
-}
-
 export interface KadakQuery<T> extends Promise<T> {
   toSQL: () => { sql: string; values: unknown[] };
   explain: () => Promise<any[]>;
   trace: () => { ast: any; plan: any; sql: string; values: unknown[] };
 }
 
-export function data<T = any>(input: Record<string, unknown>, options: { debug?: boolean } = {}): KadakQuery<T> {
-  // 0. Validate
-  validateInput(input, _schema);
+// --- Type Inference Helpers ---
+type RelationName<V> = V extends { ref: infer R } ? R : V extends `ref:${infer R}` ? R : never;
 
-  // 1. AST
-  const ast = buildAST(input);
-  
-  // 2. Plan
-  const plan = buildPlan(ast, _schema);
-  
-  // 3. SQL - Pass schema for column selection
-  const { text: sql, values } = compileSQL(plan, _schema);
-  
-  const execution = async () => {
-    let rows: any[] = [];
-    try {
-      // 4. Execute
-      rows = await runQuery(sql, values, _url);
-    } catch (e) {
-      if (options.debug) console.error("Execution failed:", (e as Error).message);
-      rows = [];
-    }
+type TableQuery<S, T extends keyof S> = {
+  where?: Record<string, any>;
+  orderBy?: Record<string, "asc" | "desc">;
+} & {
+  [K in keyof S[T]]?: RelationName<S[T][K]> extends keyof S 
+    ? TableQuery<S, RelationName<S[T][K]>> | true
+    : any;
+};
 
-    // 5. Normalize
-    const normalized = normalize(rows, ast, _schema);
+export type InferredQuery<S> = {
+  [K in keyof S]?: TableQuery<S, K>;
+};
 
-    // Return logic
-    if (options.debug) {
-      return {
-        sql,
-        values,
-        rows,
-        data: normalized
-      } as unknown as T;
-    }
+export interface KadakInstance<S extends SchemaDefinition = SchemaDefinition> {
+  schema<NewS extends SchemaDefinition>(definition: NewS): KadakInstance<NewS>;
+  data<T = any>(input: InferredQuery<S>, options?: { debug?: boolean }): KadakQuery<T>;
+  close(): Promise<void>;
+}
+// ------------------------------
 
-    return normalized as unknown as T;
+export function kadak(config: KadakConfig): KadakInstance<any> {
+  let _currentSchema: Record<string, Record<string, any>> = {};
+  const _url = config.url;
+
+  const data = <T = any>(input: Record<string, unknown>, options: { debug?: boolean } = {}): KadakQuery<T> => {
+    validateInput(input, _currentSchema);
+    const ast = buildAST(input);
+    const plan = buildPlan(ast, _currentSchema);
+    const { text: sql, values } = compileSQL(plan, _currentSchema);
+    
+    const execution = async () => {
+      let rows: any[] = [];
+      try {
+        rows = await runQuery(sql, values, _url);
+      } catch (e) {
+        if (options.debug) console.error("Execution failed:", (e as Error).message);
+        rows = [];
+      }
+      const normalized = normalize(rows, ast, _currentSchema);
+      return (options.debug ? { sql, values, rows, data: normalized } : normalized) as unknown as T;
+    };
+
+    const promise = execution();
+    const queryObj = promise as KadakQuery<T>;
+    queryObj.toSQL = () => ({ sql, values });
+    queryObj.explain = async () => {
+      const explainSql = `EXPLAIN ANALYZE ${sql}`;
+      return await runQuery(explainSql, values, _url);
+    };
+    queryObj.trace = () => ({ ast, plan, sql, values });
+    return queryObj;
   };
 
-  const promise = execution();
+  const instance: KadakInstance<any> = {
+    schema<NewS extends SchemaDefinition>(definition: NewS) {
+      for (const [table, cols] of Object.entries(definition)) {
+        if (!_currentSchema[table]) _currentSchema[table] = {};
+        for (const [col, def] of Object.entries(cols)) {
+          if (typeof def === "object" && def !== null && def.ref) {
+            _currentSchema[table][col] = `${def.ref}.id`;
+          } else if (typeof def === "string" && def.startsWith("ref:")) {
+            _currentSchema[table][col] = `${def.split(":")[1]}.id`;
+          } else if (typeof def === "string" && def.includes(".")) {
+            _currentSchema[table][col] = def;
+          } else {
+            _currentSchema[table][col] = col;
+          }
+        }
+      }
+      
+      const pushObj = {
+        push: async () => {
+          if (process.env.NODE_ENV === "production") {
+            console.warn("⚠️ [Kadak] push() called in production. Ensure this is intentional.");
+          }
+          await pushSchema(definition, _url);
+        }
+      };
 
-  const queryObj = promise as KadakQuery<T>;
-
-  queryObj.toSQL = () => ({ sql, values });
-  
-  queryObj.explain = async () => {
-    const explainSql = `EXPLAIN ANALYZE ${sql}`;
-    return await runQuery(explainSql, values, _url);
+      return Object.assign(instance, pushObj) as unknown as KadakInstance<NewS> & typeof pushObj;
+    },
+    data,
+    close: closePool
   };
 
-  queryObj.trace = () => ({
-    ast,
-    plan,
-    sql,
-    values
-  });
-
-  return queryObj;
+  return instance;
 }
 
 export * from "./query/index.js";

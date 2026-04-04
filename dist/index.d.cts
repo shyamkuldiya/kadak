@@ -1,6 +1,3 @@
-declare function runQuery(sql: string, values: unknown[], url?: string): Promise<any[]>;
-declare function closePool(): Promise<void>;
-
 type ColumnObject = {
     type?: "string" | "varchar" | "int" | "text" | "jsonb" | string;
     ref?: string;
@@ -53,6 +50,9 @@ type Compiled = {
 };
 declare function compileSQL(plan: Plan, schema: Record<string, Record<string, any>>): Compiled;
 
+declare function runQuery(sql: string, values: unknown[], url?: string): Promise<any[]>;
+declare function closePool(): Promise<void>;
+
 /**
  * Normalizes flat SQL rows into a nested object graph based on the AST structure.
  * Groups by 'id' and avoids duplicates.
@@ -62,13 +62,6 @@ declare function normalize(rows: any[], ast: QueryAST, schema: Record<string, Re
 
 type KadakConfig = {
     url: string;
-};
-declare function kadak(config: KadakConfig): {
-    schema(definition: SchemaDefinition): {
-        push: () => Promise<void>;
-    };
-    data: typeof data;
-    close: typeof closePool;
 };
 interface KadakQuery<T> extends Promise<T> {
     toSQL: () => {
@@ -83,8 +76,25 @@ interface KadakQuery<T> extends Promise<T> {
         values: unknown[];
     };
 }
-declare function data<T = any>(input: Record<string, unknown>, options?: {
-    debug?: boolean;
-}): KadakQuery<T>;
+type RelationName<V> = V extends {
+    ref: infer R;
+} ? R : V extends `ref:${infer R}` ? R : never;
+type TableQuery<S, T extends keyof S> = {
+    where?: Record<string, any>;
+    orderBy?: Record<string, "asc" | "desc">;
+} & {
+    [K in keyof S[T]]?: RelationName<S[T][K]> extends keyof S ? TableQuery<S, RelationName<S[T][K]>> | true : any;
+};
+type InferredQuery<S> = {
+    [K in keyof S]?: TableQuery<S, K>;
+};
+interface KadakInstance<S extends SchemaDefinition = SchemaDefinition> {
+    schema<NewS extends SchemaDefinition>(definition: NewS): KadakInstance<NewS>;
+    data<T = any>(input: InferredQuery<S>, options?: {
+        debug?: boolean;
+    }): KadakQuery<T>;
+    close(): Promise<void>;
+}
+declare function kadak(config: KadakConfig): KadakInstance<any>;
 
-export { type Compiled, type KadakConfig, type KadakQuery, type OrderBy, type Plan, type Predicate, type QueryAST, type RelationAST, buildAST, buildPlan, closePool, compileSQL, data, kadak, normalize, runQuery };
+export { type Compiled, type InferredQuery, type KadakConfig, type KadakInstance, type KadakQuery, type OrderBy, type Plan, type Predicate, type QueryAST, type RelationAST, buildAST, buildPlan, closePool, compileSQL, kadak, normalize, runQuery };
