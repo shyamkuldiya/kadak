@@ -15,22 +15,48 @@ npm install @shyk/kadak
 
 ---
 
-### Basic Query
+### Basic Setup
 
 ```typescript
 import { kadak } from "@shyk/kadak"
 
-const db = kadak({ 
-  url: "postgres://..."
+const db = kadak({ url: "postgres://..." })
+
+// 1. Define tables explicitly
+const users = kadak.table({
+  name: "users",
+  columns: {
+    name: "string",
+    email: { type: "string", unique: true }
+  }
 })
 
-await db.schema({
-  tasks: {
-    title: "string"
-  }
-}).push()
+// 2. Register them to get a typed instance
+const k = db.define({ users })
 
-const tasks = await db.data({
+// 3. Push schema to database
+await k.push()
+```
+
+---
+
+### Insert Mutation
+
+```typescript
+const alice = await k.insert("users", {
+  name: "Alice",
+  email: "alice@example.com"
+})
+
+console.log(alice) // { id: 1, name: "Alice", email: "alice@example.com" }
+```
+
+---
+
+### Basic Query
+
+```typescript
+const tasks = await k.data({
   tasks: {
     where: { id: 1 }
   }
@@ -44,7 +70,7 @@ const tasks = await db.data({
 Query across relations with automatic result normalization and deterministic ordering.
 
 ```typescript
-const result = await db.data({
+const result = await k.data({
   tasks: {
     orderBy: { id: "desc" },
     comments: {
@@ -64,7 +90,7 @@ const result = await db.data({
 #### Filtering (where)
 Equality-based filtering at the root level.
 ```typescript
-await db.data({
+await k.data({
   users: {
     where: { email: "alice@example.com" }
   }
@@ -74,7 +100,7 @@ await db.data({
 #### Nesting
 Fetch related data defined in your schema.
 ```typescript
-await db.data({
+await k.data({
   posts: {
     author: true,
     comments: true
@@ -85,7 +111,7 @@ await db.data({
 #### Ordering
 Stable, deterministic ordering using `asc` or `desc`.
 ```typescript
-await db.data({
+await k.data({
   tasks: {
     orderBy: { createdAt: "desc" }
   }
@@ -99,7 +125,7 @@ await db.data({
 Every query object provides introspection tools to verify generated SQL and internal state.
 
 ```typescript
-const q = db.data({ tasks: { comments: true } })
+const q = k.data({ tasks: { comments: true } })
 
 // 1. Get compiled SQL and parameterized values
 const { sql, values } = q.toSQL()

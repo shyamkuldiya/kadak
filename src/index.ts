@@ -3,6 +3,7 @@ import { buildPlan } from "./query/planner.js";
 import { compileSQL } from "./query/compiler.js";
 import { runQuery, closePool } from "./exec/client.js";
 import { normalize } from "./exec/normalize.js";
+import { buildInsertSQL } from "./exec/mutations.js";
 import { validateInput } from "./schema/validator.js";
 import { pushSchema, Table, TableConfig, SchemaDefinition, ColumnObject } from "./schema/migrator.js";
 
@@ -28,6 +29,10 @@ type TableQuery<S, T extends keyof S> = {
     : any;
 };
 
+type TableInsert<S, T extends keyof S> = {
+  [K in keyof S[T]]?: any;
+} & { id?: any };
+
 export type InferredQuery<S> = {
   [K in keyof S]?: TableQuery<S, K>;
 };
@@ -38,6 +43,7 @@ export interface KadakInstance<S extends Record<string, any> = any> {
   }>;
   push(): Promise<void>;
   data<T = any>(input: InferredQuery<S>, options?: { debug?: boolean }): KadakQuery<T>;
+  insert<T extends keyof S>(table: T, data: TableInsert<S, T>): Promise<any>;
   close(): Promise<void>;
 }
 // ------------------------------
@@ -110,6 +116,27 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
         console.warn("⚠️ [Kadak] push() called in production. Ensure this is intentional.");
       }
       await pushSchema(_rawDefinition, _url);
+    },
+
+    async insert(table: string, data: Record<string, any>) {
+      const tableSchema = _currentSchema[table];
+      if (!tableSchema) {
+        throw new Error(`Invalid table: ${table} not found in defined schema.`);
+      }
+
+      // Validate fields
+      for (const field of Object.keys(data)) {
+        if (field !== "id" && !tableSchema[field]) {
+          throw new Error(`Invalid field: ${field} not found on table ${table}`);
+        }
+      }
+
+      const { sql, values } = buildInsertSQL(table, data);
+      const rows = await runQuery(sql, values, _url);
+      
+      // Minimal normalization for single row
+      const ast = { root: table, relations: [] };
+      return normalize(rows, ast, _currentSchema)[0];
     },
 
     data,

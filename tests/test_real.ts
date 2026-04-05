@@ -45,7 +45,7 @@ async function runRealTest() {
     await k.push();
     console.log("✅ Schema pushed.");
 
-    // 4. Insert Data
+    // 4. Insert Data using k.insert
     console.log("\n2. Inserting Sample Data...");
     const { runQuery } = await import("../src/exec/client.js");
     
@@ -53,17 +53,17 @@ async function runRealTest() {
     await runQuery("DELETE FROM tasks", [], DB_URL);
     await runQuery("DELETE FROM users", [], DB_URL);
 
-    const user1 = await runQuery("INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id", ["Alice", "alice@example.com"], DB_URL);
-    const user2 = await runQuery("INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id", ["Bob", "bob@example.com"], DB_URL);
+    const alice = await k.insert("users", { name: "Alice", email: "alice@example.com" });
+    const bob = await k.insert("users", { name: "Bob", email: "bob@example.com" });
     
-    const aliceId = user1[0].id;
-    const bobId = user2[0].id;
+    const aliceId = alice.id;
+    const bobId = bob.id;
 
-    const task1 = await runQuery("INSERT INTO tasks (title, userid) VALUES ($1, $2) RETURNING id", ["Task 1", aliceId], DB_URL);
-    const taskId = task1[0].id;
+    const task1 = await k.insert("tasks", { title: "Task 1", userid: aliceId });
+    const taskId = task1.id;
 
-    await runQuery("INSERT INTO comments (content, taskid, authorid) VALUES ($1, $2, $3)", ["Great task!", taskId, bobId], DB_URL);
-    await runQuery("INSERT INTO comments (content, taskid, authorid) VALUES ($1, $2, $3)", ["I agree.", taskId, aliceId], DB_URL);
+    await k.insert("comments", { content: "Great task!", taskid: taskId, authorid: bobId });
+    await k.insert("comments", { content: "I agree.", taskid: taskId, authorid: aliceId });
     
     console.log("✅ Data inserted.");
 
