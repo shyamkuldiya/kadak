@@ -5,34 +5,47 @@ async function runRealTest() {
 
   console.log("--- Kadak Real Usage Test (NeonDB) ---");
 
-  const db = kadak({ 
-    url: DB_URL
+  const db = kadak({ url: DB_URL });
+
+  // 1. Explicit Table Definitions
+  const users = kadak.table({
+    name: "users",
+    columns: {
+      name: "string",
+      email: { type: "string", unique: true },
+      tasks: "tasks.userid"
+    }
   });
 
+  const tasks = kadak.table({
+    name: "tasks",
+    columns: {
+      title: "string",
+      userid: "ref:users",
+      comments: "comments.taskid"
+    }
+  });
+
+  const comments = kadak.table({
+    name: "comments",
+    columns: {
+      content: "text",
+      taskid: "ref:tasks",
+      authorid: "ref:users",
+      author: "users.id"
+    }
+  });
+
+  // 2. Explicit Registration
+  const k = db.define({ users, tasks, comments });
+
   try {
-    // 1. Schema Push
+    // 3. Schema Push
     console.log("\n1. Pushing Schema...");
-    await db.schema({
-      users: {
-        name: "string",
-        email: { type: "string", unique: true },
-        tasks: "tasks.userid" // Reverse relation
-      },
-      tasks: {
-        title: "string",
-        userid: "ref:users",
-        comments: "comments.taskid" // Reverse relation
-      },
-      comments: {
-        content: "text",
-        taskid: "ref:tasks",
-        authorid: "ref:users",
-        author: "users.id" // Mapping for query
-      }
-    }).push();
+    await k.push();
     console.log("✅ Schema pushed.");
 
-    // 2. Insert Data
+    // 4. Insert Data
     console.log("\n2. Inserting Sample Data...");
     const { runQuery } = await import("../src/exec/client.js");
     
@@ -54,9 +67,9 @@ async function runRealTest() {
     
     console.log("✅ Data inserted.");
 
-  // 3. Run Nested Query
+    // 5. Run Nested Query
     console.log("\n3. Running Nested Query: tasks -> comments -> author");
-    const result = await db.data({
+    const result = await k.data({
       tasks: {
         where: { id: taskId },
         comments: {
@@ -69,7 +82,7 @@ async function runRealTest() {
     console.log("Generated SQL:\n", result.sql);
     console.log("\nNormalized Data:\n", JSON.stringify(result.data, null, 2));
 
-    // 4. Verification
+    // 6. Verification
     const task = result.data[0];
     if (
       task && 

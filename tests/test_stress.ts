@@ -5,32 +5,42 @@ async function runStressTest() {
 
   console.log("--- Kadak Stress & Edge Case Test ---");
 
-  const db = kadak({ 
-    url: DB_URL
-  });
+  const db = kadak({ url: DB_URL });
 
-  const schemaDef = {
-    users: {
+  // 1. Explicit Table Definitions
+  const users = kadak.table({
+    name: "users",
+    columns: {
       name: "string",
       email: "string",
       tasks: "tasks.userid"
-    },
-    tasks: {
+    }
+  });
+
+  const tasks = kadak.table({
+    name: "tasks",
+    columns: {
       title: "string",
       userid: "ref:users",
       comments: "comments.taskid"
-    },
-    comments: {
+    }
+  });
+
+  const comments = kadak.table({
+    name: "comments",
+    columns: {
       content: "text",
       taskid: "ref:tasks",
       authorid: "ref:users",
       author: "users.id"
     }
-  };
+  });
+
+  const k = db.define({ users, tasks, comments });
 
   try {
     console.log("1. Setting up schema...");
-    await db.schema(schemaDef).push();
+    await k.push();
 
     const { runQuery } = await import("../src/exec/client.js");
     await runQuery("DELETE FROM comments", [], DB_URL);
@@ -63,7 +73,7 @@ async function runStressTest() {
     console.log("✅ Data seeded.");
 
     console.log("\n3. Running Deep Query: tasks -> comments -> author");
-    const result = await db.data({
+    const result = await k.data({
       tasks: {
         comments: {
           author: true
@@ -88,7 +98,7 @@ async function runStressTest() {
 
     // 4. Empty Result Set Edge Case
     console.log("\n4. Empty Result Set Test:");
-    const emptyResult = await db.data({
+    const emptyResult = await k.data({
       tasks: {
         where: { id: 999999 }
       }

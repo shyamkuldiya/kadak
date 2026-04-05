@@ -5,16 +5,16 @@ async function runVerification() {
 
   const db = kadak({ url: DB_URL });
 
-  db.schema({
-    users: { id: "users.id", tasks: "tasks.userid" },
-    tasks: { id: "tasks.id", userid: "ref:users", comments: "comments.taskid" },
-    comments: { id: "comments.id", taskid: "ref:tasks", author: "users.id" }
-  });
+  const users = kadak.table({ name: "users", columns: { id: "users.id", tasks: "tasks.userid" } });
+  const tasks = kadak.table({ name: "tasks", columns: { id: "tasks.id", userid: "ref:users", comments: "comments.taskid" } });
+  const comments = kadak.table({ name: "comments", columns: { id: "comments.id", taskid: "ref:tasks", author: "users.id" } });
+
+  const k = db.define({ users, tasks, comments });
 
   console.log("\n🚀 KADAK MANUAL VERIFICATION VIEW\n" + "=".repeat(40));
 
   try {
-    const result = await db.data({
+    const result = await k.data({
       tasks: {
         comments: {
           author: true

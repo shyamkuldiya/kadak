@@ -6,32 +6,33 @@ async function runDXTests() {
   const DB_URL = "postgres://localhost:5432/mock";
   const db = kadak({ url: DB_URL });
 
-  // 1. Test schema reuse without push()
-  console.log("\n1. Schema reuse without push():");
-  db.schema({
-    tasks: {
-      title: "string"
-    }
+  // 1. Explicit Table Definition and Registration
+  const tasks = kadak.table({
+    name: "tasks",
+    columns: { title: "string" }
   });
 
+  const k = db.define({ tasks });
+
+  // 2. Test schema reuse
+  console.log("\n1. Schema reuse:");
   try {
-    const q = db.data({
+    const q = k.data({
       tasks: {
         where: { id: 1 }
       }
     });
-    console.log("✅ Success: Query created using previously defined schema.");
+    console.log("✅ Success: Query created using registered table.");
     console.log("Generated SQL:", q.toSQL().sql);
   } catch (e: any) {
-    console.log("❌ Failure: Schema was not reused correctly.", e.message);
+    console.log("❌ Failure: Schema registration failed.", e.message);
   }
 
-  // 2. Test production warning
+  // 3. Test production warning
   console.log("\n2. Production warning test:");
   const originalEnv = process.env.NODE_ENV;
   process.env.NODE_ENV = "production";
   
-  // Capture console.warn
   const originalWarn = console.warn;
   let warnCalled = false;
   console.warn = (...args: any[]) => {
@@ -39,8 +40,7 @@ async function runDXTests() {
     originalWarn(...args);
   };
 
-  // We don't await so it doesn't fail on mock DB connection
-  db.schema({ users: { name: "string" } }).push().catch(() => {});
+  await k.push().catch(() => {});
   
   if (warnCalled) {
     console.log("✅ Success: Production warning was triggered.");
@@ -48,7 +48,6 @@ async function runDXTests() {
     console.log("❌ Failure: Production warning was not triggered.");
   }
 
-  // Restore env and console
   process.env.NODE_ENV = originalEnv;
   console.warn = originalWarn;
 

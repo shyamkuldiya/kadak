@@ -7,29 +7,37 @@ async function runTests() {
     url: "postgres://localhost:5432/mock"
   });
 
-  const schemaDef = {
-    tasks: { 
+  const tasks = kadak.table({
+    name: "tasks",
+    columns: { 
       id: "tasks.id",
       user: "users.id",
       comments: "comments.taskid"
-    },
-    comments: {
+    }
+  });
+
+  const comments = kadak.table({
+    name: "comments",
+    columns: {
       id: "comments.id",
       author: "users.id"
-    },
-    users: {
+    }
+  });
+
+  const users = kadak.table({
+    name: "users",
+    columns: {
       id: "users.id"
     }
-  };
+  });
 
-  // Pre-load schema for validation
-  db.schema(schemaDef);
+  const k = db.define({ tasks, comments, users });
 
   // 1. Invalid relation
   console.log("\n1. Invalid Relation Test:");
   try {
     console.log("Query: { tasks: { invalid_rel: true } }");
-    await db.data({ tasks: { invalid_rel: true } });
+    await k.data({ tasks: { invalid_rel: true } } as any);
   } catch (e: any) {
     console.log("Caught expected error:", e.message);
   }
@@ -38,7 +46,7 @@ async function runTests() {
   console.log("\n2. Invalid Where Field Test:");
   try {
     console.log("Query: { tasks: { where: { non_existent: 1 } } }");
-    await db.data({ tasks: { where: { non_existent: 1 } } });
+    await k.data({ tasks: { where: { non_existent: 1 } } } as any);
   } catch (e: any) {
     console.log("Caught expected error:", e.message);
   }
@@ -47,7 +55,7 @@ async function runTests() {
   console.log("\n3. Empty Query Test:");
   try {
     console.log("Query: {}");
-    await db.data({});
+    await k.data({} as any);
   } catch (e: any) {
     console.log("Caught expected error:", e.message);
   }
@@ -56,7 +64,7 @@ async function runTests() {
   console.log("\n4. Missing Schema Mapping Test:");
   try {
     console.log("Query: { unknown_table: {} }");
-    await db.data({ unknown_table: {} });
+    await k.data({ unknown_table: {} } as any);
   } catch (e: any) {
     console.log("Caught expected error:", e.message);
   }

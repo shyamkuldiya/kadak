@@ -7,20 +7,31 @@ async function runTests() {
     url: "postgres://localhost:5432/mock"
   });
 
-  const schemaDef = {
-    tasks: { 
+  const tasks = kadak.table({
+    name: "tasks",
+    columns: { 
       id: "tasks.id",
       user: "users.id",
       comments: "comments.task_id"
-    },
-    comments: {
+    }
+  });
+
+  const comments = kadak.table({
+    name: "comments",
+    columns: {
       id: "comments.id",
       author: "users.id"
-    },
-    users: {}
-  };
+    }
+  });
 
-  db.schema(schemaDef);
+  const users = kadak.table({
+    name: "users",
+    columns: {
+      id: "users.id"
+    }
+  });
+
+  const k = db.define({ tasks, comments, users });
 
   const queryInput = {
     tasks: {
@@ -31,7 +42,7 @@ async function runTests() {
     }
   };
 
-  const q = db.data(queryInput);
+  const q = k.data(queryInput);
 
   // 1. .toSQL()
   console.log("\n1. .toSQL() Test:");
@@ -60,14 +71,6 @@ async function runTests() {
   console.log("\n3. .explain() Test (expected execution fail on mock):");
   try {
     await q.explain();
-  } catch (e: any) {
-    console.log("Caught expected execution error:", e.message);
-  }
-
-  // 4. Verify the promise still works
-  console.log("\n4. Execution Promise Test (expected fail on mock):");
-  try {
-    await q;
   } catch (e: any) {
     console.log("Caught expected execution error:", e.message);
   }

@@ -1,39 +1,51 @@
+import { kadak } from "../src/index.js";
 import { buildSchemaSQL } from "../src/schema/migrator.js";
 
 async function runTests() {
   console.log("--- Kadak Expanded Schema Tests ---");
 
-  const schemaDef = {
-    users: {
+  const users = kadak.table({
+    name: "users",
+    columns: {
       email: { type: "string", unique: true },
       name: { type: "varchar", length: 100, nullable: false },
       age: "int",
       role: { type: "string", default: "user" }
-    },
-    posts: {
+    }
+  });
+
+  const posts = kadak.table({
+    name: "posts",
+    columns: {
       title: "string",
       content: "text",
       authorId: { ref: "users", onDelete: "cascade", index: true },
       metadata: "jsonb"
     }
-  };
+  });
 
   console.log("\n1. Verify Expanded SQL Generation:");
-  const sqls = buildSchemaSQL(schemaDef as any);
+  const schemaDef = {
+    users: users.config.columns,
+    posts: posts.config.columns
+  };
+  const sqls = buildSchemaSQL(schemaDef);
   sqls.forEach(sql => console.log(sql));
 
-  // Verification
+  // Verification helper: remove quotes and normalize whitespace for comparison
+  const clean = (s: string) => s.replace(/"/g, "").replace(/\s+/g, " ");
+
   const userSql = sqls.find(s => s.includes("CREATE TABLE IF NOT EXISTS users"));
   const postSql = sqls.find(s => s.includes("CREATE TABLE IF NOT EXISTS posts"));
   const indexSql = sqls.find(s => s.includes("CREATE INDEX IF NOT EXISTS idx_posts_authorId"));
 
   const results = [
-    { name: "Users Table", pass: !!userSql && userSql.includes("email VARCHAR(255) UNIQUE") },
-    { name: "Users Name (length/nullable)", pass: !!userSql && userSql.includes("name VARCHAR(100) NOT NULL") },
-    { name: "Users Role (default)", pass: !!userSql && userSql.includes("role VARCHAR(255) DEFAULT 'user'") },
-    { name: "Posts FK (onDelete)", pass: !!postSql && postSql.includes("REFERENCES users(id) ON DELETE CASCADE") },
+    { name: "Users Table", pass: !!userSql && clean(userSql).includes("email VARCHAR(255) UNIQUE") },
+    { name: "Users Name (length/nullable)", pass: !!userSql && clean(userSql).includes("name VARCHAR(100) NOT NULL") },
+    { name: "Users Role (default)", pass: !!userSql && clean(userSql).includes("role VARCHAR(255) DEFAULT 'user'") },
+    { name: "Posts FK (onDelete)", pass: !!postSql && clean(postSql).includes("REFERENCES users(id) ON DELETE CASCADE") },
     { name: "Posts Index", pass: !!indexSql },
-    { name: "Posts Metadata (jsonb)", pass: !!postSql && postSql.includes("metadata JSONB") }
+    { name: "Posts Metadata (jsonb)", pass: !!postSql && clean(postSql).includes("metadata JSONB") }
   ];
 
   results.forEach(res => {

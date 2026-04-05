@@ -9,7 +9,13 @@ type ColumnObject = {
     index?: boolean;
 };
 type ColumnDef = string | ColumnObject;
-type SchemaDefinition = Record<string, Record<string, ColumnDef>>;
+interface TableConfig<N extends string = string, C extends Record<string, ColumnDef> = Record<string, ColumnDef>> {
+    name: N;
+    columns: C;
+}
+interface Table<N extends string = string, C extends Record<string, ColumnDef> = Record<string, ColumnDef>> {
+    config: TableConfig<N, C>;
+}
 
 type Predicate = {
     field: string;
@@ -88,13 +94,19 @@ type TableQuery<S, T extends keyof S> = {
 type InferredQuery<S> = {
     [K in keyof S]?: TableQuery<S, K>;
 };
-interface KadakInstance<S extends SchemaDefinition = SchemaDefinition> {
-    schema<NewS extends SchemaDefinition>(definition: NewS): KadakInstance<NewS>;
+interface KadakInstance<S extends Record<string, any> = any> {
+    define<Tables extends Record<string, Table<any, any>>>(tables: Tables): KadakInstance<{
+        [K in keyof Tables]: Tables[K]["config"]["columns"];
+    }>;
+    push(): Promise<void>;
     data<T = any>(input: InferredQuery<S>, options?: {
         debug?: boolean;
     }): KadakQuery<T>;
     close(): Promise<void>;
 }
-declare function kadak(config: KadakConfig): KadakInstance<any>;
+declare const kadak: {
+    (config: KadakConfig): KadakInstance<any>;
+    table<N extends string, C extends Record<string, any>>(config: TableConfig<N, C>): Table<N, C>;
+};
 
 export { type Compiled, type InferredQuery, type KadakConfig, type KadakInstance, type KadakQuery, type OrderBy, type Plan, type Predicate, type QueryAST, type RelationAST, buildAST, buildPlan, closePool, compileSQL, kadak, normalize, runQuery };

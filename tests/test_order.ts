@@ -9,14 +9,17 @@ async function runOrderTest() {
     url: DB_URL
   });
 
-  db.schema({
-    tasks: { id: "tasks.id", title: "tasks.title" }
+  const tasks = kadak.table({
+    name: "tasks",
+    columns: { id: "tasks.id", title: "tasks.title" }
   });
+
+  const k = db.define({ tasks });
 
   try {
     // 1. Order by ID ASC
     console.log("\n1. Order by ID ASC:");
-    const q1 = await db.data({
+    const q1 = await k.data({
       tasks: {
         orderBy: { id: "asc" }
       }
@@ -28,7 +31,7 @@ async function runOrderTest() {
 
     // 2. Order by ID DESC
     console.log("\n2. Order by ID DESC:");
-    const q2 = await db.data({
+    const q2 = await k.data({
       tasks: {
         orderBy: { id: "desc" }
       }

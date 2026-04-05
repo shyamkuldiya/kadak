@@ -4,7 +4,7 @@ import { compileSQL } from "./query/compiler.js";
 import { runQuery, closePool } from "./exec/client.js";
 import { normalize } from "./exec/normalize.js";
 import { validateInput } from "./schema/validator.js";
-import { pushSchema, SchemaDefinition } from "./schema/migrator.js";
+import { pushSchema, Table, TableConfig, SchemaDefinition, ColumnObject } from "./schema/migrator.js";
 
 export type KadakConfig = {
   url: string;
@@ -32,15 +32,19 @@ export type InferredQuery<S> = {
   [K in keyof S]?: TableQuery<S, K>;
 };
 
-export interface KadakInstance<S extends SchemaDefinition = SchemaDefinition> {
-  schema<NewS extends SchemaDefinition>(definition: NewS): KadakInstance<NewS>;
+export interface KadakInstance<S extends Record<string, any> = any> {
+  define<Tables extends Record<string, Table<any, any>>>(tables: Tables): KadakInstance<{
+    [K in keyof Tables]: Tables[K]["config"]["columns"]
+  }>;
+  push(): Promise<void>;
   data<T = any>(input: InferredQuery<S>, options?: { debug?: boolean }): KadakQuery<T>;
   close(): Promise<void>;
 }
 // ------------------------------
 
-export function kadak(config: KadakConfig): KadakInstance<any> {
+export const kadak = (config: KadakConfig): KadakInstance<any> => {
   let _currentSchema: Record<string, Record<string, any>> = {};
+  let _rawDefinition: SchemaDefinition = {};
   const _url = config.url;
 
   const data = <T = any>(input: Record<string, unknown>, options: { debug?: boolean } = {}): KadakQuery<T> => {
@@ -73,39 +77,51 @@ export function kadak(config: KadakConfig): KadakInstance<any> {
   };
 
   const instance: KadakInstance<any> = {
-    schema<NewS extends SchemaDefinition>(definition: NewS) {
-      for (const [table, cols] of Object.entries(definition)) {
-        if (!_currentSchema[table]) _currentSchema[table] = {};
-        for (const [col, def] of Object.entries(cols)) {
-          if (typeof def === "object" && def !== null && def.ref) {
-            _currentSchema[table][col] = `${def.ref}.id`;
+    define(tables: Record<string, Table<any, any>>) {
+      for (const [key, table] of Object.entries(tables)) {
+        const tableName = table.config.name;
+        const columns = table.config.columns;
+        
+        _rawDefinition[tableName] = columns;
+        _currentSchema[tableName] = {};
+        
+        for (const [col, def] of Object.entries(columns)) {
+          if (typeof def === "object" && def !== null) {
+            const colObj = def as ColumnObject;
+            if (colObj.ref) {
+              _currentSchema[tableName][col] = `${colObj.ref}.id`;
+            } else {
+              _currentSchema[tableName][col] = col;
+            }
           } else if (typeof def === "string" && def.startsWith("ref:")) {
-            _currentSchema[table][col] = `${def.split(":")[1]}.id`;
+            _currentSchema[tableName][col] = `${def.split(":")[1]}.id`;
           } else if (typeof def === "string" && def.includes(".")) {
-            _currentSchema[table][col] = def;
+            _currentSchema[tableName][col] = def;
           } else {
-            _currentSchema[table][col] = col;
+            _currentSchema[tableName][col] = col;
           }
         }
       }
-      
-      const pushObj = {
-        push: async () => {
-          if (process.env.NODE_ENV === "production") {
-            console.warn("⚠️ [Kadak] push() called in production. Ensure this is intentional.");
-          }
-          await pushSchema(definition, _url);
-        }
-      };
-
-      return Object.assign(instance, pushObj) as unknown as KadakInstance<NewS> & typeof pushObj;
+      return instance as any;
     },
+
+    async push() {
+      if (process.env.NODE_ENV === "production") {
+        console.warn("⚠️ [Kadak] push() called in production. Ensure this is intentional.");
+      }
+      await pushSchema(_rawDefinition, _url);
+    },
+
     data,
     close: closePool
   };
 
   return instance;
-}
+};
+
+kadak.table = <N extends string, C extends Record<string, any>>(config: TableConfig<N, C>): Table<N, C> => {
+  return { config };
+};
 
 export * from "./query/index.js";
 export * from "./exec/index.js";

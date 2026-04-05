@@ -346,8 +346,9 @@ async function pushSchema(definition, url) {
 }
 
 // src/index.ts
-function kadak(config) {
+var kadak = (config) => {
   let _currentSchema = {};
+  let _rawDefinition = {};
   const _url = config.url;
   const data = (input, options = {}) => {
     validateInput(input, _currentSchema);
@@ -376,36 +377,45 @@ function kadak(config) {
     return queryObj;
   };
   const instance = {
-    schema(definition) {
-      for (const [table, cols] of Object.entries(definition)) {
-        if (!_currentSchema[table]) _currentSchema[table] = {};
-        for (const [col, def] of Object.entries(cols)) {
-          if (typeof def === "object" && def !== null && def.ref) {
-            _currentSchema[table][col] = `${def.ref}.id`;
+    define(tables) {
+      for (const [key, table] of Object.entries(tables)) {
+        const tableName = table.config.name;
+        const columns = table.config.columns;
+        _rawDefinition[tableName] = columns;
+        _currentSchema[tableName] = {};
+        for (const [col, def] of Object.entries(columns)) {
+          if (typeof def === "object" && def !== null) {
+            const colObj = def;
+            if (colObj.ref) {
+              _currentSchema[tableName][col] = `${colObj.ref}.id`;
+            } else {
+              _currentSchema[tableName][col] = col;
+            }
           } else if (typeof def === "string" && def.startsWith("ref:")) {
-            _currentSchema[table][col] = `${def.split(":")[1]}.id`;
+            _currentSchema[tableName][col] = `${def.split(":")[1]}.id`;
           } else if (typeof def === "string" && def.includes(".")) {
-            _currentSchema[table][col] = def;
+            _currentSchema[tableName][col] = def;
           } else {
-            _currentSchema[table][col] = col;
+            _currentSchema[tableName][col] = col;
           }
         }
       }
-      const pushObj = {
-        push: async () => {
-          if (process.env.NODE_ENV === "production") {
-            console.warn("\u26A0\uFE0F [Kadak] push() called in production. Ensure this is intentional.");
-          }
-          await pushSchema(definition, _url);
-        }
-      };
-      return Object.assign(instance, pushObj);
+      return instance;
+    },
+    async push() {
+      if (process.env.NODE_ENV === "production") {
+        console.warn("\u26A0\uFE0F [Kadak] push() called in production. Ensure this is intentional.");
+      }
+      await pushSchema(_rawDefinition, _url);
     },
     data,
     close: closePool
   };
   return instance;
-}
+};
+kadak.table = (config) => {
+  return { config };
+};
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   buildAST,

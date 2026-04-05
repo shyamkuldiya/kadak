@@ -8,42 +8,46 @@ import { kadak } from "../src/index.js";
 async function testAutocomplete() {
   const db = kadak({ url: "postgres://localhost:5432/db" });
 
-  // 1. Define schema
-  // The 'as const' is important for TypeScript to infer literal types!
-  const mySchema = {
-    users: {
+  // 1. Explicit Table Definitions
+  const users = kadak.table({
+    name: "users",
+    columns: {
       name: "string",
-      posts: "ref:posts"
-    },
-    posts: {
+      email: { type: "string", unique: true },
+      posts: "posts.author" // Explicitly define relation
+    }
+  });
+
+  const posts = kadak.table({
+    name: "posts",
+    columns: {
       title: "string",
-      author: "ref:users",
-      comments: "ref:comments"
-    },
-    comments: {
-      content: "text",
-      post: "ref:posts",
       author: "ref:users"
     }
-  } as const;
+  });
 
-  // 2. Initialize typed instance
-  const typedDb = db.schema(mySchema);
+  // 2. Explicit Registration
+  const typedDb = db.define({
+    users,
+    posts
+  });
 
   // 3. Autocomplete Check
-  // Try typing 'typedDb.data({ ' below and see suggestions for 'users', 'posts', 'comments'
+  // Try typing 'typedDb.data({ ' below and see suggestions for 'users', 'posts'
   await typedDb.data({
     users: {
-      where: { id: 1 },
+      where: { name: "Alice" },
       posts: {
-        comments: {
-          author: true
-        }
+        where: { title: "Hello" }
       }
     }
   });
 
-  console.log("✅ Types are strictly inferred. Autocomplete is enabled.");
+  // TypeScript Error Check (uncomment to see error)
+  // @ts-expect-error - 'invalid_table' does not exist
+  // await typedDb.data({ invalid_table: {} });
+
+  console.log("✅ Explicit table registration works. Autocomplete is enabled.");
   await db.close().catch(() => {});
 }
 

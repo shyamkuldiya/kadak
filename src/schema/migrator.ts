@@ -13,6 +13,15 @@ export type ColumnObject = {
 
 export type ColumnDef = string | ColumnObject;
 
+export interface TableConfig<N extends string = string, C extends Record<string, ColumnDef> = Record<string, ColumnDef>> {
+  name: N;
+  columns: C;
+}
+
+export interface Table<N extends string = string, C extends Record<string, ColumnDef> = Record<string, ColumnDef>> {
+  config: TableConfig<N, C>;
+}
+
 export type SchemaDefinition = Record<string, Record<string, ColumnDef>>;
 
 export function buildSchemaSQL(definition: SchemaDefinition): string[] {
@@ -32,7 +41,6 @@ export function buildSchemaSQL(definition: SchemaDefinition): string[] {
       const isObject = typeof def === "object" && def !== null;
       const shorthand = typeof def === "string" ? def : "";
 
-      // 1. Resolve Type
       if (shorthand === "string" || (isObject && def.type === "string")) {
         typeStr = "VARCHAR(255)";
       } else if (isObject && def.type === "varchar") {
@@ -52,7 +60,6 @@ export function buildSchemaSQL(definition: SchemaDefinition): string[] {
         onDelete = def.onDelete ? ` ON DELETE ${def.onDelete.toUpperCase()}` : "";
       }
 
-      // 2. Resolve Constraints
       if (isObject) {
         if (def.unique) constraints += " UNIQUE";
         if (def.nullable === false) constraints += " NOT NULL";
@@ -65,7 +72,6 @@ export function buildSchemaSQL(definition: SchemaDefinition): string[] {
         }
       }
 
-      // 3. Assemble
       if (typeStr) {
         colDefs.push(`"${colName}" ${typeStr}${constraints}`);
       }

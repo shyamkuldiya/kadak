@@ -4,38 +4,47 @@ import { normalize } from "../src/exec/normalize.js";
 async function runTests() {
   console.log("--- Kadak Integration & Normalization Tests ---");
 
-  const schemaDef = {
-    tasks: { 
+  const tasks = kadak.table({
+    name: "tasks",
+    columns: { 
       id: "tasks.id",
       title: "tasks.title",
       user: "users.id",
       comments: "comments.task_id"
-    },
-    comments: {
+    }
+  });
+
+  const comments = kadak.table({
+    name: "comments",
+    columns: {
       id: "comments.id",
       content: "comments.content",
       author: "users.id"
-    },
-    users: {
+    }
+  });
+
+  const users = kadak.table({
+    name: "users",
+    columns: {
       id: "users.id",
       name: "users.name"
     }
-  };
+  });
 
   const db = kadak({ 
     url: "postgres://localhost:5432/mock"
   });
 
-  db.schema(schemaDef);
+  const k = db.define({ tasks, comments, users });
 
   // 1. Simple query
   console.log("\n1. Simple Query Test:");
-  const q1 = await db.data({ tasks: { user: true } }, { debug: true });
+  const q1 = await k.data({ tasks: { user: true } }, { debug: true });
   console.log("SQL:", q1.sql);
 
   // 2. Nested query
   console.log("\n2. Nested Query Test:");
-  const q2 = await db.data({
+  const q2 = await k.data({
     tasks: {
       comments: {
         author: true
@@ -46,7 +55,7 @@ async function runTests() {
 
   // 3. Where query
   console.log("\n3. Where Query Test:");
-  const q3 = await db.data({
+  const q3 = await k.data({
     tasks: {
       where: { id: 1 }
     }
