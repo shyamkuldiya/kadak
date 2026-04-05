@@ -53,6 +53,19 @@ console.log(alice) // { id: 1, name: "Alice", email: "alice@example.com" }
 
 ---
 
+### Update Mutation
+
+```typescript
+const updatedUsers = await k.update("users", {
+  where: { id: 1 },
+  data: { name: "Bob" }
+})
+
+console.log(updatedUsers) // [{ id: 1, name: "Bob", email: "alice@example.com" }]
+```
+
+---
+
 ### Basic Query
 
 ```typescript
