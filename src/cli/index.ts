@@ -17,10 +17,9 @@ async function run() {
 
   let config;
   try {
-    // Dynamic import works with tsx during dev and potentially after build if handled
     config = await import(configUrl);
   } catch (e) {
-    console.error(`❌ Error: Could not find kadak.config.ts in root directory.`);
+    console.error(`❌ Error: Could not find or load kadak.config.ts in root directory.`);
     process.exit(1);
   }
 

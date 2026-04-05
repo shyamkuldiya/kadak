@@ -1,4 +1,4 @@
-import { kadak } from "../src/index.js";
+import { kadak } from "./src/index.js";
 const { t } = kadak;
 
 const users = kadak.table({
