@@ -115,7 +115,8 @@ const result = await k.data({
 #### Default Values & Timestamps
 ```typescript
 t.string().default("anonymous")
-t.int().default(0)
+t.string().unique().notNull()
+t.int().index().default(0)
 t.timestamp().defaultNow()
 t.timestamps() // createdAt + updatedAt
 ```

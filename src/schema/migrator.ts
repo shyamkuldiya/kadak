@@ -53,6 +53,11 @@ export class ColumnBuilder {
     return this;
   }
 
+  notNull() {
+    this.obj.nullable = false;
+    return this;
+  }
+
   length(val: number) {
     this.obj.length = val;
     return this;
