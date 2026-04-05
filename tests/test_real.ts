@@ -67,8 +67,16 @@ async function runRealTest() {
     
     console.log("✅ Data inserted.");
 
-    // 5. Run Nested Query
-    console.log("\n3. Running Nested Query: tasks -> comments -> author");
+    // 5. Update Data
+    console.log("\n3. Updating Alice's name to 'Alicia'...");
+    const updatedUsers = await k.update("users", {
+      where: { id: aliceId },
+      data: { name: "Alicia" }
+    });
+    console.log("✅ Alice updated to Alicia.");
+
+    // 6. Run Nested Query
+    console.log("\n4. Running Nested Query: tasks -> comments -> author");
     const result = await k.data({
       tasks: {
         where: { id: taskId },
@@ -82,17 +90,19 @@ async function runRealTest() {
     console.log("Generated SQL:\n", result.sql);
     console.log("\nNormalized Data:\n", JSON.stringify(result.data, null, 2));
 
-    // 6. Verification
+    // 7. Verification
     const task = result.data[0];
+    const aliceAuthor = task.comments.find((c: any) => c.author.id === aliceId)?.author;
+    
     if (
       task && 
       task.id === taskId &&
       task.comments.length === 2 && 
-      task.comments[0].author.id !== undefined
+      aliceAuthor && aliceAuthor.name === "Alicia"
     ) {
-      console.log("\n✅ Success: Nested data is correct and normalized.");
+      console.log("\n✅ Success: Nested data is correct and update verified.");
     } else {
-      console.log("\n❌ Failure: Data mismatch in result.");
+      console.log("\n❌ Failure: Data mismatch or update not reflected.");
     }
 
   } catch (e: any) {
