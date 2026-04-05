@@ -1,11 +1,12 @@
 export function validateInput(input: Record<string, unknown>, schema: Record<string, Record<string, string>>) {
   if (Object.keys(input).length === 0) {
-    throw new Error("Input cannot be empty");
+    throw new Error("❌ Kadak Error: Input cannot be empty. Please provide a table to query.");
   }
 
   const rootTable = Object.keys(input)[0];
   if (!schema[rootTable] && rootTable !== "where") {
-    throw new Error(`Missing schema mapping for table: ${rootTable}`);
+    const suggestions = getSuggestions(rootTable, Object.keys(schema));
+    throw new Error(`❌ Kadak Error: Table '${rootTable}' not found. ${suggestions}`);
   }
 
   validateNode(rootTable, input[rootTable] as Record<string, unknown>, schema);
@@ -13,24 +14,25 @@ export function validateInput(input: Record<string, unknown>, schema: Record<str
 
 function validateNode(tableName: string, nodeInput: Record<string, unknown>, schema: Record<string, Record<string, string>>) {
   const tableSchema = schema[tableName] || {};
+  const validFields = Object.keys(tableSchema);
 
   for (const [key, value] of Object.entries(nodeInput)) {
     if (key === "where") {
       const whereObj = value as Record<string, unknown>;
       for (const field of Object.keys(whereObj)) {
-        // 'id' is a reserved/automatic field that is always valid
         if (field !== "id" && !tableSchema[field]) {
-          throw new Error(`Invalid where field: ${field} not found on ${tableName}`);
+          const suggestions = getSuggestions(field, validFields);
+          throw new Error(`❌ Kadak Error: Invalid filter field '${field}' on table '${tableName}'. ${suggestions}`);
         }
       }
     } else if (key === "limit" || key === "orderBy") {
-       // Support basic query keys
        continue;
     } else {
       // It's a relation
       const target = tableSchema[key];
       if (!target) {
-        throw new Error(`Invalid relation: ${key} not found on ${tableName}`);
+        const suggestions = getSuggestions(key, validFields);
+        throw new Error(`❌ Kadak Error: Relation '${key}' not found on table '${tableName}'. ${suggestions}`);
       }
 
       if (typeof value === "object" && value !== null) {
@@ -39,4 +41,15 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
       }
     }
   }
+}
+
+function getSuggestions(input: string, validOptions: string[]): string {
+  if (validOptions.length === 0) return "";
+  
+  // Very simple "did you mean" based on partial matching
+  const matches = validOptions.filter(opt => opt.includes(input) || input.includes(opt));
+  if (matches.length > 0) {
+    return `Did you mean: ${matches.join(", ")}?`;
+  }
+  return `Available: ${validOptions.join(", ")}`;
 }
