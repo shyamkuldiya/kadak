@@ -162,10 +162,7 @@ export function buildSchemaSQL(definition: SchemaDefinition): string[] {
     for (const [colName, rawDef] of Object.entries(columns)) {
       const { columnSQL, fkSQL } = generateColumnSQL(colName, rawDef, tableName, indexStatements);
       if (columnSQL) colDefs.push(columnSQL);
-      // For CREATE TABLE, we usually put FKs inline, but for incremental we use ALTER TABLE.
-      // To keep buildSchemaSQL consistent for FIRST push, we can put them inline.
       if (fkSQL) {
-        // extract parts from fkSQL: ALTER TABLE x ADD CONSTRAINT y FOREIGN KEY (z) REFERENCES w(p) ON DELETE v
         const match = fkSQL.match(/FOREIGN KEY .*/);
         if (match) fks.push(match[0]);
       }
@@ -189,7 +186,6 @@ function calculateHash(definition: SchemaDefinition): string {
 export async function pushSchema(definition: SchemaDefinition, url: string) {
   const currentHash = calculateHash(definition);
 
-  // 1. Ensure migrations table exists
   await runQuery(`
     CREATE TABLE IF NOT EXISTS _kadak_migrations (
       id SERIAL PRIMARY KEY,
@@ -198,14 +194,12 @@ export async function pushSchema(definition: SchemaDefinition, url: string) {
     );
   `, [], url);
 
-  // 2. Check if hash exists
   const existing = await runQuery(`SELECT id FROM _kadak_migrations WHERE hash = $1`, [currentHash], url);
   if (existing.length > 0) {
-    console.log("ℹ️ [Kadak] Schema up to date. Skipping push.");
+    console.log("ℹ️ [Kadak] No changes detected. Schema is up to date.");
     return;
   }
 
-  // 3. Incremental Update: Introspect existing tables/columns
   const existingTablesRes = await runQuery(`
     SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
   `, [], url);
@@ -216,12 +210,10 @@ export async function pushSchema(definition: SchemaDefinition, url: string) {
 
   for (const [tableName, columns] of Object.entries(definition)) {
     if (!existingTables.has(tableName)) {
-      console.log(`✨ [Kadak] Creating table: ${tableName}`);
-      // Use existing buildSchemaSQL logic for new tables
+      console.log(`✨ [Kadak] New table detected: ${tableName}`);
       const subDef: SchemaDefinition = { [tableName]: columns };
       statements.push(...buildSchemaSQL(subDef));
     } else {
-      // Table exists, check for new columns
       const existingColsRes = await runQuery(`
         SELECT column_name FROM information_schema.columns 
         WHERE table_schema = 'public' AND table_name = $1
@@ -230,7 +222,7 @@ export async function pushSchema(definition: SchemaDefinition, url: string) {
 
       for (const [colName, rawDef] of Object.entries(columns)) {
         if (!existingCols.has(colName)) {
-          console.log(`➕ [Kadak] Adding column: ${colName} to ${tableName}`);
+          console.log(`➕ [Kadak] New column detected: ${tableName}.${colName}`);
           const { columnSQL, fkSQL } = generateColumnSQL(colName, rawDef, tableName, indexStatements);
           statements.push(`ALTER TABLE ${tableName} ADD COLUMN ${columnSQL};`);
           if (fkSQL) statements.push(fkSQL + ";");
@@ -239,18 +231,15 @@ export async function pushSchema(definition: SchemaDefinition, url: string) {
     }
   }
 
-  // Combine and execute
   const allSql = [...statements, ...indexStatements];
   if (allSql.length > 0) {
     for (const sql of allSql) {
       await runQuery(sql, [], url);
     }
-    // 4. Record new hash
     await runQuery(`INSERT INTO _kadak_migrations (hash) VALUES ($1)`, [currentHash], url);
-    console.log("✅ [Kadak] Schema push complete.");
+    console.log("✅ [Kadak] Schema migration applied successfully.");
   } else {
-    // If no SQL was generated but hash was different (shouldn't happen with our logic but for safety)
     await runQuery(`INSERT INTO _kadak_migrations (hash) VALUES ($1)`, [currentHash], url);
-    console.log("ℹ️ [Kadak] No changes detected. Migration recorded.");
+    console.log("ℹ️ [Kadak] Migration metadata updated.");
   }
 }

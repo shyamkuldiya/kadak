@@ -19,33 +19,33 @@ async function run() {
   try {
     config = await import(configUrl);
   } catch (e) {
-    console.error(`❌ Error: Could not find or load kadak.config.ts in root directory.`);
+    console.error(`❌ Kadak Error: Could not find 'kadak.config.ts' in your project root.`);
     process.exit(1);
   }
 
   const { url, schema } = config.default || config;
 
   if (!url) {
-    console.error("❌ Error: 'url' missing in kadak.config.ts");
+    console.error("❌ Kadak Error: 'url' property is missing in 'kadak.config.ts'");
     process.exit(1);
   }
 
   if (!schema) {
-    console.error("❌ Error: 'schema' missing in kadak.config.ts");
+    console.error("❌ Kadak Error: 'schema' property is missing in 'kadak.config.ts'");
     process.exit(1);
   }
 
   try {
     const db = kadak({ url });
-    const k = db.define(schema);
+    db.define(schema);
     
-    console.log("🚀 Kadak CLI: Starting push...");
-    await k.push();
-    console.log("✨ Kadak CLI: Push successful!");
+    console.log("🚀 Kadak: Syncing schema with PostgreSQL...");
+    await db.push();
+    console.log("✨ Kadak: Done.");
     
     await db.close();
   } catch (e: any) {
-    console.error(`❌ Kadak CLI: Push failed - ${e.message}`);
+    console.error(`❌ Kadak Error: Push failed - ${e.message}`);
     process.exit(1);
   }
 }
