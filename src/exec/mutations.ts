@@ -1,24 +1,49 @@
 export function buildInsertSQL(table: string, data: Record<string, any>): { sql: string; values: any[] } {
-  const fields = Object.keys(data);
-  const values = Object.values(data);
-  const placeholders = fields.map((_, i) => `$${i + 1}`).join(", ");
+  const fields: string[] = [];
+  const values: any[] = [];
+  const valuePlaceholders: string[] = [];
+
+  const entries = Object.entries(data);
   
-  const sql = `INSERT INTO ${table} (${fields.map(f => `"${f}"`).join(", ")}) VALUES (${placeholders}) RETURNING *`;
+  if (entries.length === 0) {
+    return { sql: `INSERT INTO ${table} DEFAULT VALUES RETURNING *`, values: [] };
+  }
+
+  entries.forEach(([field, val]) => {
+    fields.push(field);
+    if (val === "NOW()") {
+      valuePlaceholders.push("NOW()");
+    } else {
+      values.push(val);
+      valuePlaceholders.push(`$${values.length}`);
+    }
+  });
+  
+  const sql = `INSERT INTO ${table} (${fields.map(f => `"${f}"`).join(", ")}) VALUES (${valuePlaceholders.join(", ")}) RETURNING *`;
   
   return { sql, values };
 }
 
 export function buildUpdateSQL(table: string, where: Record<string, any>, data: Record<string, any>): { sql: string; values: any[] } {
-  const setFields = Object.keys(data);
-  const setValues = Object.values(data);
-  const whereFields = Object.keys(where);
-  const whereValues = Object.values(where);
+  const values: any[] = [];
+  
+  const setClauses: string[] = [];
+  Object.entries(data).forEach(([field, val]) => {
+    if (val === "NOW()") {
+      setClauses.push(`"${field}" = NOW()`);
+    } else {
+      values.push(val);
+      setClauses.push(`"${field}" = $${values.length}`);
+    }
+  });
 
-  const setClauses = setFields.map((f, i) => `"${f}" = $${i + 1}`).join(", ");
-  const whereClauses = whereFields.map((f, i) => `"${f}" = $${setFields.length + i + 1}`).join(" AND ");
+  const whereClauses: string[] = [];
+  Object.entries(where).forEach(([field, val]) => {
+    values.push(val);
+    whereClauses.push(`"${field}" = $${values.length}`);
+  });
 
-  const sql = `UPDATE ${table} SET ${setClauses} WHERE ${whereClauses} RETURNING *`;
-  const values = [...setValues, ...whereValues];
+  const sql = `UPDATE ${table} SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")} RETURNING *`;
 
   return { sql, values };
 }

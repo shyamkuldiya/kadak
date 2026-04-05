@@ -19,15 +19,18 @@ npm install @shyk/kadak
 
 ```typescript
 import { kadak } from "@shyk/kadak"
+const { t } = kadak
 
 const db = kadak({ url: "postgres://..." })
 
-// 1. Define tables explicitly
+// 1. Define tables with fluent API
 const users = kadak.table({
   name: "users",
   columns: {
-    name: "string",
-    email: { type: "string", unique: true }
+    name: t.string().default("guest"),
+    email: t.string().unique(),
+    age: t.int().default(0),
+    ...t.timestamps() // Adds createdAt and updatedAt
   }
 })
 
@@ -48,7 +51,8 @@ const alice = await k.insert("users", {
   email: "alice@example.com"
 })
 
-console.log(alice) // { id: 1, name: "Alice", email: "alice@example.com" }
+console.log(alice) 
+// { id: 1, name: "Alice", email: "alice@example.com", createdAt: ..., updatedAt: ... }
 ```
 
 ---
@@ -61,7 +65,8 @@ const updatedUsers = await k.update("users", {
   data: { name: "Bob" }
 })
 
-console.log(updatedUsers) // [{ id: 1, name: "Bob", email: "alice@example.com" }]
+// updatedAt is automatically updated if defined in schema
+console.log(updatedUsers) 
 ```
 
 ---
@@ -72,8 +77,6 @@ console.log(updatedUsers) // [{ id: 1, name: "Bob", email: "alice@example.com" }
 const deletedUsers = await k.delete("users", {
   where: { id: 1 }
 })
-
-console.log(deletedUsers) // [{ id: 1, name: "Bob", ... }]
 ```
 
 ---
@@ -103,14 +106,19 @@ const result = await k.data({
     }
   }
 })
-
-// Result is a nested object graph
-// tasks -> comments[] -> author {}
 ```
 
 ---
 
 ### Common Patterns
+
+#### Default Values & Timestamps
+```typescript
+t.string().default("anonymous")
+t.int().default(0)
+t.timestamp().defaultNow()
+t.timestamps() // createdAt + updatedAt
+```
 
 #### Filtering (where)
 Equality-based filtering at the root level.

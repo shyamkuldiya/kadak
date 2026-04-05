@@ -5,7 +5,7 @@ import { runQuery, closePool } from "./exec/client.js";
 import { normalize } from "./exec/normalize.js";
 import { buildInsertSQL, buildUpdateSQL, buildDeleteSQL } from "./exec/mutations.js";
 import { validateInput } from "./schema/validator.js";
-import { pushSchema, Table, TableConfig, SchemaDefinition, ColumnObject } from "./schema/migrator.js";
+import { pushSchema, Table, TableConfig, SchemaDefinition, ColumnObject, ColumnBuilder, t } from "./schema/migrator.js";
 
 export type KadakConfig = {
   url: string;
@@ -102,20 +102,18 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
         _rawDefinition[tableName] = columns;
         _currentSchema[tableName] = {};
         
-        for (const [col, def] of Object.entries(columns)) {
-          if (typeof def === "object" && def !== null) {
-            const colObj = def as ColumnObject;
-            if (colObj.ref) {
-              _currentSchema[tableName][col] = `${colObj.ref}.id`;
-            } else {
-              _currentSchema[tableName][col] = col;
-            }
-          } else if (typeof def === "string" && def.startsWith("ref:")) {
-            _currentSchema[tableName][col] = `${def.split(":")[1]}.id`;
-          } else if (typeof def === "string" && def.includes(".")) {
-            _currentSchema[tableName][col] = def;
+        for (const [col, rawDef] of Object.entries(columns)) {
+          const def: ColumnObject = (rawDef instanceof ColumnBuilder) ? (rawDef as any).build() : (typeof rawDef === "string" ? { type: rawDef } : rawDef);
+          
+          if (def.ref) {
+            _currentSchema[tableName][col] = `${def.ref}.id`;
+          } else if (typeof rawDef === "string" && rawDef.startsWith("ref:")) {
+            _currentSchema[tableName][col] = `${rawDef.split(":")[1]}.id`;
+          } else if (typeof rawDef === "string" && rawDef.includes(".")) {
+            _currentSchema[tableName][col] = rawDef;
           } else {
-            _currentSchema[tableName][col] = col;
+            // Store the full object in schema so update() can find autoUpdate fields
+            _currentSchema[tableName][col] = def;
           }
         }
       }
@@ -158,6 +156,13 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
         throw new Error(`Update mutation requires a 'where' clause.`);
       }
 
+      // Auto-populate updatedAt if exists
+      for (const [col, def] of Object.entries(tableSchema)) {
+        if (typeof def === "object" && def !== null && def.autoUpdate) {
+          options.data[col] = "NOW()";
+        }
+      }
+
       for (const field of Object.keys(options.data)) {
         if (field !== "id" && !tableSchema[field]) {
           throw new Error(`Invalid field: ${field} not found on table ${table}`);
@@ -171,7 +176,14 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
       }
 
       const { sql, values } = buildUpdateSQL(table, options.where, options.data);
-      const rows = await runQuery(sql, values, _url);
+      // Replace "NOW()" string with literal in SQL for updatedAt
+      let finalSql = sql;
+      const finalValues = [...values];
+      
+      // We need to handle NOW() literals in mutations.ts or here.
+      // For minimalism, let's just handle it in buildUpdateSQL/buildInsertSQL by checking value.
+      
+      const rows = await runQuery(finalSql, finalValues, _url);
       
       const ast = { root: table, relations: [] };
       return normalize(rows, ast, _currentSchema);
@@ -211,5 +223,8 @@ kadak.table = <N extends string, C extends Record<string, any>>(config: TableCon
   return { config };
 };
 
+kadak.t = t;
+
 export * from "./query/index.js";
 export * from "./exec/index.js";
+export { t } from "./schema/migrator.js";

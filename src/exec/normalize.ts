@@ -3,7 +3,7 @@ import { QueryAST, RelationAST } from "../query/ast.js";
 /**
  * Normalizes flat SQL rows into a nested object graph based on the AST structure.
  * Groups by 'id' and avoids duplicates.
- * All columns are expected to be aliased as 'tableId__columnName'.
+ * Supports both aliased (table__col) and raw rows (for mutations).
  */
 export function normalize(rows: any[], ast: QueryAST, schema: Record<string, Record<string, any>>): any[] {
   const rootMap = new Map<unknown, any>();
@@ -12,16 +12,20 @@ export function normalize(rows: any[], ast: QueryAST, schema: Record<string, Rec
   const rootPrefix = `${ast.root}__`;
 
   for (const row of rows) {
-    const id = row[`${rootPrefix}id`];
+    // Check for aliased ID first, then fallback to raw 'id' (for mutations)
+    const id = row[`${rootPrefix}id`] ?? row.id;
     if (id === null || id === undefined) continue;
 
     let rootObj = rootMap.get(id);
     if (!rootObj) {
       rootObj = { id };
-      // Map root fields
+      // Map root fields: handle both aliased and raw
       for (const [key, val] of Object.entries(row)) {
-        if (key.startsWith(rootPrefix) && key !== `${rootPrefix}id`) {
-          rootObj[key.replace(rootPrefix, "")] = val;
+        if (key.startsWith(rootPrefix)) {
+          if (key !== `${rootPrefix}id`) rootObj[key.replace(rootPrefix, "")] = val;
+        } else if (!key.includes("__")) {
+          // If it's a raw column (no __ in name) and not 'id'
+          if (key !== "id") rootObj[key] = val;
         }
       }
       rootMap.set(id, rootObj);
@@ -48,7 +52,6 @@ function processRelations(
     const [targetTable, targetField] = target.split(".");
     const isOneToMany = targetField !== "id";
 
-    // Use relation name as alias/prefix (consistent with Planner/Compiler)
     const prefix = `${rel.name}__`;
     const relId = row[`${prefix}id`];
     
@@ -59,7 +62,6 @@ function processRelations(
       continue;
     }
 
-    // Identify/Create object
     let relObj: any;
     if (isOneToMany) {
       if (!parentObj[rel.name]) parentObj[rel.name] = [];
@@ -70,7 +72,6 @@ function processRelations(
 
     if (!relObj) {
       relObj = { id: relId };
-      // Map fields for this relation
       for (const [key, val] of Object.entries(row)) {
         if (key.startsWith(prefix) && key !== `${prefix}id`) {
           relObj[key.replace(prefix, "")] = val;
