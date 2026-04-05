@@ -75,7 +75,7 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
       try {
         rows = await runQuery(sql, values, _url);
       } catch (e) {
-        if (options.debug) console.error("Execution failed:", (e as Error).message);
+        if (options.debug) console.error("❌ Kadak Execution Error:", (e as Error).message);
         rows = [];
       }
       const normalized = normalize(rows, ast, _currentSchema);
@@ -112,7 +112,6 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
           } else if (typeof rawDef === "string" && rawDef.includes(".")) {
             _currentSchema[tableName][col] = rawDef;
           } else {
-            // Store the full object in schema so update() can find autoUpdate fields
             _currentSchema[tableName][col] = def;
           }
         }
@@ -130,12 +129,12 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
     async insert(table: string, data: Record<string, any>) {
       const tableSchema = _currentSchema[table];
       if (!tableSchema) {
-        throw new Error(`Invalid table: ${table} not found in defined schema.`);
+        throw new Error(`❌ Kadak Error: Table '${table}' not found in defined schema.`);
       }
 
       for (const field of Object.keys(data)) {
         if (field !== "id" && !tableSchema[field]) {
-          throw new Error(`Invalid field: ${field} not found on table ${table}`);
+          throw new Error(`❌ Kadak Error: Invalid field '${field}' on table '${table}'.`);
         }
       }
 
@@ -149,41 +148,33 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
     async update(table: string, options: { where: Record<string, any>, data: Record<string, any> }) {
       const tableSchema = _currentSchema[table];
       if (!tableSchema) {
-        throw new Error(`Invalid table: ${table} not found in defined schema.`);
+        throw new Error(`❌ Kadak Error: Table '${table}' not found in defined schema.`);
       }
 
       if (!options.where || Object.keys(options.where).length === 0) {
-        throw new Error(`Update mutation requires a 'where' clause.`);
+        throw new Error(`❌ Kadak Error: Update mutation requires a 'where' clause.`);
       }
 
-      // Auto-populate updatedAt if exists
       for (const [col, def] of Object.entries(tableSchema)) {
-        if (typeof def === "object" && def !== null && def.autoUpdate) {
+        if (typeof def === "object" && def !== null && (def as any).autoUpdate) {
           options.data[col] = "NOW()";
         }
       }
 
       for (const field of Object.keys(options.data)) {
         if (field !== "id" && !tableSchema[field]) {
-          throw new Error(`Invalid field: ${field} not found on table ${table}`);
+          throw new Error(`❌ Kadak Error: Invalid field '${field}' on table '${table}'.`);
         }
       }
 
       for (const field of Object.keys(options.where)) {
         if (field !== "id" && !tableSchema[field]) {
-          throw new Error(`Invalid where field: ${field} not found on table ${table}`);
+          throw new Error(`❌ Kadak Error: Invalid filter field '${field}' on table '${table}'.`);
         }
       }
 
       const { sql, values } = buildUpdateSQL(table, options.where, options.data);
-      // Replace "NOW()" string with literal in SQL for updatedAt
-      let finalSql = sql;
-      const finalValues = [...values];
-      
-      // We need to handle NOW() literals in mutations.ts or here.
-      // For minimalism, let's just handle it in buildUpdateSQL/buildInsertSQL by checking value.
-      
-      const rows = await runQuery(finalSql, finalValues, _url);
+      const rows = await runQuery(sql, values, _url);
       
       const ast = { root: table, relations: [] };
       return normalize(rows, ast, _currentSchema);
@@ -192,16 +183,16 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
     async delete(table: string, options: { where: Record<string, any> }) {
       const tableSchema = _currentSchema[table];
       if (!tableSchema) {
-        throw new Error(`Invalid table: ${table} not found in defined schema.`);
+        throw new Error(`❌ Kadak Error: Table '${table}' not found in defined schema.`);
       }
 
       if (!options.where || Object.keys(options.where).length === 0) {
-        throw new Error(`Delete mutation requires a 'where' clause.`);
+        throw new Error(`❌ Kadak Error: Delete mutation requires a 'where' clause.`);
       }
 
       for (const field of Object.keys(options.where)) {
         if (field !== "id" && !tableSchema[field]) {
-          throw new Error(`Invalid where field: ${field} not found on table ${table}`);
+          throw new Error(`❌ Kadak Error: Invalid filter field '${field}' on table '${table}'.`);
         }
       }
 
