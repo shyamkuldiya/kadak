@@ -22,3 +22,14 @@ export function buildUpdateSQL(table: string, where: Record<string, any>, data: 
 
   return { sql, values };
 }
+
+export function buildDeleteSQL(table: string, where: Record<string, any>): { sql: string; values: any[] } {
+  const whereFields = Object.keys(where);
+  const whereValues = Object.values(where);
+
+  const whereClauses = whereFields.map((f, i) => `"${f}" = $${i + 1}`).join(" AND ");
+
+  const sql = `DELETE FROM ${table} WHERE ${whereClauses} RETURNING *`;
+  
+  return { sql, values: whereValues };
+}

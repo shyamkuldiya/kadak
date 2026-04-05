@@ -3,7 +3,7 @@ import { buildPlan } from "./query/planner.js";
 import { compileSQL } from "./query/compiler.js";
 import { runQuery, closePool } from "./exec/client.js";
 import { normalize } from "./exec/normalize.js";
-import { buildInsertSQL, buildUpdateSQL } from "./exec/mutations.js";
+import { buildInsertSQL, buildUpdateSQL, buildDeleteSQL } from "./exec/mutations.js";
 import { validateInput } from "./schema/validator.js";
 import { pushSchema, Table, TableConfig, SchemaDefinition, ColumnObject } from "./schema/migrator.js";
 
@@ -38,6 +38,10 @@ type TableUpdate<S, T extends keyof S> = {
   data: Partial<TableInsert<S, T>>;
 };
 
+type TableDelete<S, T extends keyof S> = {
+  where: Record<string, any>;
+};
+
 export type InferredQuery<S> = {
   [K in keyof S]?: TableQuery<S, K>;
 };
@@ -50,6 +54,7 @@ export interface KadakInstance<S extends Record<string, any> = any> {
   data<T = any>(input: InferredQuery<S>, options?: { debug?: boolean }): KadakQuery<T>;
   insert<T extends keyof S>(table: T, data: TableInsert<S, T>): Promise<any>;
   update<T extends keyof S>(table: T, options: TableUpdate<S, T>): Promise<any[]>;
+  delete<T extends keyof S>(table: T, options: TableDelete<S, T>): Promise<any[]>;
   close(): Promise<void>;
 }
 // ------------------------------
@@ -153,14 +158,12 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
         throw new Error(`Update mutation requires a 'where' clause.`);
       }
 
-      // Validate data fields
       for (const field of Object.keys(options.data)) {
         if (field !== "id" && !tableSchema[field]) {
           throw new Error(`Invalid field: ${field} not found on table ${table}`);
         }
       }
 
-      // Validate where fields
       for (const field of Object.keys(options.where)) {
         if (field !== "id" && !tableSchema[field]) {
           throw new Error(`Invalid where field: ${field} not found on table ${table}`);
@@ -168,6 +171,29 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
       }
 
       const { sql, values } = buildUpdateSQL(table, options.where, options.data);
+      const rows = await runQuery(sql, values, _url);
+      
+      const ast = { root: table, relations: [] };
+      return normalize(rows, ast, _currentSchema);
+    },
+
+    async delete(table: string, options: { where: Record<string, any> }) {
+      const tableSchema = _currentSchema[table];
+      if (!tableSchema) {
+        throw new Error(`Invalid table: ${table} not found in defined schema.`);
+      }
+
+      if (!options.where || Object.keys(options.where).length === 0) {
+        throw new Error(`Delete mutation requires a 'where' clause.`);
+      }
+
+      for (const field of Object.keys(options.where)) {
+        if (field !== "id" && !tableSchema[field]) {
+          throw new Error(`Invalid where field: ${field} not found on table ${table}`);
+        }
+      }
+
+      const { sql, values } = buildDeleteSQL(table, options.where);
       const rows = await runQuery(sql, values, _url);
       
       const ast = { root: table, relations: [] };

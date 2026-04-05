@@ -66,6 +66,18 @@ console.log(updatedUsers) // [{ id: 1, name: "Bob", email: "alice@example.com" }
 
 ---
 
+### Delete Mutation
+
+```typescript
+const deletedUsers = await k.delete("users", {
+  where: { id: 1 }
+})
+
+console.log(deletedUsers) // [{ id: 1, name: "Bob", ... }]
+```
+
+---
+
 ### Basic Query
 
 ```typescript
