@@ -9,18 +9,27 @@ export function compileSQL(plan: Plan, schema: Record<string, Record<string, any
   const values: unknown[] = [];
   const selections: string[] = [];
 
+  // Helper to add columns for a table
   const addTableColumns = (tableName: string, alias?: string) => {
     const tableId = alias || tableName;
     const tableSchema = schema[tableName] || {};
-    selections.push(`${tableId}.id AS ${tableId}__id`);
+    
+    // Always include ID
+    selections.push(`${tableId}.id AS "${tableId}__id"`);
+    
+    // Include only fields that are NOT relations
     for (const [field, mapping] of Object.entries(tableSchema)) {
       if (field === "id") continue;
       if (typeof mapping === "string" && mapping.includes(".")) continue;
-      selections.push(`${tableId}."${field}" AS ${tableId}__${field}`);
+      // Quote both the field and the alias to preserve case
+      selections.push(`${tableId}."${field}" AS "${tableId}__${field}"`);
     }
   };
 
+  // Select for root
   addTableColumns(plan.from);
+
+  // Select for joins
   for (const join of plan.joins) {
     addTableColumns(join.table, join.alias);
   }
