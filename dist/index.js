@@ -85,11 +85,11 @@ function compileSQL(plan, schema) {
   const addTableColumns = (tableName, alias) => {
     const tableId = alias || tableName;
     const tableSchema = schema[tableName] || {};
-    selections.push(`${tableId}.id AS ${tableId}__id`);
+    selections.push(`${tableId}.id AS "${tableId}__id"`);
     for (const [field, mapping] of Object.entries(tableSchema)) {
       if (field === "id") continue;
       if (typeof mapping === "string" && mapping.includes(".")) continue;
-      selections.push(`${tableId}."${field}" AS ${tableId}__${field}`);
+      selections.push(`${tableId}."${field}" AS "${tableId}__${field}"`);
     }
   };
   addTableColumns(plan.from);
@@ -146,14 +146,16 @@ function normalize(rows, ast, schema) {
   const results = [];
   const rootPrefix = `${ast.root}__`;
   for (const row of rows) {
-    const id = row[`${rootPrefix}id`];
+    const id = row[`${rootPrefix}id`] ?? row.id;
     if (id === null || id === void 0) continue;
     let rootObj = rootMap.get(id);
     if (!rootObj) {
       rootObj = { id };
       for (const [key, val] of Object.entries(row)) {
-        if (key.startsWith(rootPrefix) && key !== `${rootPrefix}id`) {
-          rootObj[key.replace(rootPrefix, "")] = val;
+        if (key.startsWith(rootPrefix)) {
+          if (key !== `${rootPrefix}id`) rootObj[key.replace(rootPrefix, "")] = val;
+        } else if (!key.includes("__")) {
+          if (key !== "id") rootObj[key] = val;
         }
       }
       rootMap.set(id, rootObj);
@@ -203,25 +205,76 @@ function processRelations(parentTable, parentObj, row, relations, schema) {
   }
 }
 
+// src/exec/mutations.ts
+function buildInsertSQL(table, data) {
+  const fields = [];
+  const values = [];
+  const valuePlaceholders = [];
+  const entries = Object.entries(data);
+  if (entries.length === 0) {
+    return { sql: `INSERT INTO ${table} DEFAULT VALUES RETURNING *`, values: [] };
+  }
+  entries.forEach(([field, val]) => {
+    fields.push(field);
+    if (val === "NOW()") {
+      valuePlaceholders.push("NOW()");
+    } else {
+      values.push(val);
+      valuePlaceholders.push(`$${values.length}`);
+    }
+  });
+  const sql = `INSERT INTO ${table} (${fields.map((f) => `"${f}"`).join(", ")}) VALUES (${valuePlaceholders.join(", ")}) RETURNING *`;
+  return { sql, values };
+}
+function buildUpdateSQL(table, where, data) {
+  const values = [];
+  const setClauses = [];
+  Object.entries(data).forEach(([field, val]) => {
+    if (val === "NOW()") {
+      setClauses.push(`"${field}" = NOW()`);
+    } else {
+      values.push(val);
+      setClauses.push(`"${field}" = $${values.length}`);
+    }
+  });
+  const whereClauses = [];
+  Object.entries(where).forEach(([field, val]) => {
+    values.push(val);
+    whereClauses.push(`"${field}" = $${values.length}`);
+  });
+  const sql = `UPDATE ${table} SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")} RETURNING *`;
+  return { sql, values };
+}
+function buildDeleteSQL(table, where) {
+  const whereFields = Object.keys(where);
+  const whereValues = Object.values(where);
+  const whereClauses = whereFields.map((f, i) => `"${f}" = $${i + 1}`).join(" AND ");
+  const sql = `DELETE FROM ${table} WHERE ${whereClauses} RETURNING *`;
+  return { sql, values: whereValues };
+}
+
 // src/schema/validator.ts
 function validateInput(input, schema) {
   if (Object.keys(input).length === 0) {
-    throw new Error("Input cannot be empty");
+    throw new Error("\u274C Kadak Error: Input cannot be empty. Please provide a table to query.");
   }
   const rootTable = Object.keys(input)[0];
   if (!schema[rootTable] && rootTable !== "where") {
-    throw new Error(`Missing schema mapping for table: ${rootTable}`);
+    const suggestions = getSuggestions(rootTable, Object.keys(schema));
+    throw new Error(`\u274C Kadak Error: Table '${rootTable}' not found. ${suggestions}`);
   }
   validateNode(rootTable, input[rootTable], schema);
 }
 function validateNode(tableName, nodeInput, schema) {
   const tableSchema = schema[tableName] || {};
+  const validFields = Object.keys(tableSchema);
   for (const [key, value] of Object.entries(nodeInput)) {
     if (key === "where") {
       const whereObj = value;
       for (const field of Object.keys(whereObj)) {
         if (field !== "id" && !tableSchema[field]) {
-          throw new Error(`Invalid where field: ${field} not found on ${tableName}`);
+          const suggestions = getSuggestions(field, validFields);
+          throw new Error(`\u274C Kadak Error: Invalid filter field '${field}' on table '${tableName}'. ${suggestions}`);
         }
       }
     } else if (key === "limit" || key === "orderBy") {
@@ -229,7 +282,8 @@ function validateNode(tableName, nodeInput, schema) {
     } else {
       const target = tableSchema[key];
       if (!target) {
-        throw new Error(`Invalid relation: ${key} not found on ${tableName}`);
+        const suggestions = getSuggestions(key, validFields);
+        throw new Error(`\u274C Kadak Error: Relation '${key}' not found on table '${tableName}'. ${suggestions}`);
       }
       if (typeof value === "object" && value !== null) {
         const [targetTable] = target.split(".");
@@ -238,68 +292,203 @@ function validateNode(tableName, nodeInput, schema) {
     }
   }
 }
+function getSuggestions(input, validOptions) {
+  if (validOptions.length === 0) return "";
+  const matches = validOptions.filter((opt) => opt.includes(input) || input.includes(opt));
+  if (matches.length > 0) {
+    return `Did you mean: ${matches.join(", ")}?`;
+  }
+  return `Available: ${validOptions.join(", ")}`;
+}
 
 // src/schema/migrator.ts
+import { createHash } from "crypto";
+var ColumnBuilder = class {
+  obj = {};
+  constructor(type) {
+    if (type) this.obj.type = type;
+  }
+  default(val) {
+    this.obj.default = val;
+    return this;
+  }
+  defaultNow() {
+    this.obj.default = "NOW()";
+    return this;
+  }
+  unique() {
+    this.obj.unique = true;
+    return this;
+  }
+  nullable(val = true) {
+    this.obj.nullable = val;
+    return this;
+  }
+  notNull() {
+    this.obj.nullable = false;
+    return this;
+  }
+  length(val) {
+    this.obj.length = val;
+    return this;
+  }
+  onDelete(val) {
+    this.obj.onDelete = val;
+    return this;
+  }
+  index() {
+    this.obj.index = true;
+    return this;
+  }
+  // Internal helper to get the raw object
+  build() {
+    return this.obj;
+  }
+};
+var t = {
+  string: () => new ColumnBuilder("string"),
+  varchar: (len) => new ColumnBuilder("varchar").length(len || 255),
+  int: () => new ColumnBuilder("int"),
+  text: () => new ColumnBuilder("text"),
+  jsonb: () => new ColumnBuilder("jsonb"),
+  timestamp: () => new ColumnBuilder("timestamp"),
+  ref: (table) => {
+    const b = new ColumnBuilder();
+    b.obj.ref = table;
+    b.obj.type = "int";
+    return b;
+  },
+  timestamps: () => ({
+    createdAt: new ColumnBuilder("timestamp").defaultNow().build(),
+    updatedAt: { type: "timestamp", default: "NOW()", autoUpdate: true }
+  })
+};
+function generateColumnSQL(colName, rawDef, tableName, indexStatements) {
+  if (typeof rawDef === "string" && rawDef.includes(".")) {
+    return { columnSQL: null };
+  }
+  const def = typeof rawDef?.build === "function" ? rawDef.build() : typeof rawDef === "string" ? { type: rawDef } : rawDef;
+  let typeStr = "";
+  let constraints = "";
+  let refTable = "";
+  let onDelete = "";
+  if (def.type === "string") {
+    typeStr = "VARCHAR(255)";
+  } else if (def.type === "varchar") {
+    typeStr = `VARCHAR(${def.length || 255})`;
+  } else if (def.type === "int") {
+    typeStr = "INTEGER";
+  } else if (def.type === "text") {
+    typeStr = "TEXT";
+  } else if (def.type === "jsonb") {
+    typeStr = "JSONB";
+  } else if (def.type === "timestamp") {
+    typeStr = "TIMESTAMP";
+  } else if (typeof rawDef === "string" && rawDef.startsWith("ref:")) {
+    refTable = rawDef.split(":")[1];
+    typeStr = "INTEGER";
+  } else if (def.ref) {
+    refTable = def.ref;
+    typeStr = "INTEGER";
+    onDelete = def.onDelete ? ` ON DELETE ${def.onDelete.toUpperCase()}` : "";
+  }
+  if (def.unique) constraints += " UNIQUE";
+  if (def.nullable === false) constraints += " NOT NULL";
+  if (def.default !== void 0) {
+    const val = def.default === "NOW()" ? "NOW()" : typeof def.default === "string" ? `'${def.default}'` : def.default;
+    constraints += ` DEFAULT ${val}`;
+  }
+  if (def.index) {
+    indexStatements.push(`CREATE INDEX IF NOT EXISTS idx_${tableName}_${colName} ON ${tableName}("${colName}");`);
+  }
+  let fkSQL;
+  if (refTable) {
+    fkSQL = `ALTER TABLE ${tableName} ADD CONSTRAINT fk_${tableName}_${colName} FOREIGN KEY ("${colName}") REFERENCES ${refTable}(id)${onDelete}`;
+  }
+  return { columnSQL: `"${colName}" ${typeStr}${constraints}`, fkSQL };
+}
 function buildSchemaSQL(definition) {
   const statements = [];
   const indexStatements = [];
   for (const [tableName, columns] of Object.entries(definition)) {
     const colDefs = ["id SERIAL PRIMARY KEY"];
-    const fkDefs = [];
-    for (const [colName, def] of Object.entries(columns)) {
-      let typeStr = "";
-      let constraints = "";
-      let refTable = "";
-      let onDelete = "";
-      const isObject = typeof def === "object" && def !== null;
-      const shorthand = typeof def === "string" ? def : "";
-      if (shorthand === "string" || isObject && def.type === "string") {
-        typeStr = "VARCHAR(255)";
-      } else if (isObject && def.type === "varchar") {
-        typeStr = `VARCHAR(${def.length || 255})`;
-      } else if (shorthand === "int" || isObject && def.type === "int") {
-        typeStr = "INTEGER";
-      } else if (shorthand === "text" || isObject && def.type === "text") {
-        typeStr = "TEXT";
-      } else if (shorthand === "jsonb" || isObject && def.type === "jsonb") {
-        typeStr = "JSONB";
-      } else if (shorthand.startsWith("ref:")) {
-        refTable = shorthand.split(":")[1];
-        typeStr = "INTEGER";
-      } else if (isObject && def.ref) {
-        refTable = def.ref;
-        typeStr = "INTEGER";
-        onDelete = def.onDelete ? ` ON DELETE ${def.onDelete.toUpperCase()}` : "";
-      }
-      if (isObject) {
-        if (def.unique) constraints += " UNIQUE";
-        if (def.nullable === false) constraints += " NOT NULL";
-        if (def.default !== void 0) {
-          const val = typeof def.default === "string" ? `'${def.default}'` : def.default;
-          constraints += ` DEFAULT ${val}`;
-        }
-        if (def.index) {
-          indexStatements.push(`CREATE INDEX IF NOT EXISTS idx_${tableName}_${colName} ON ${tableName}("${colName}");`);
-        }
-      }
-      if (typeStr) {
-        colDefs.push(`"${colName}" ${typeStr}${constraints}`);
-      }
-      if (refTable) {
-        fkDefs.push(`FOREIGN KEY ("${colName}") REFERENCES ${refTable}(id)${onDelete}`);
+    const fks = [];
+    for (const [colName, rawDef] of Object.entries(columns)) {
+      const { columnSQL, fkSQL } = generateColumnSQL(colName, rawDef, tableName, indexStatements);
+      if (columnSQL) colDefs.push(columnSQL);
+      if (fkSQL) {
+        const match = fkSQL.match(/FOREIGN KEY .*/);
+        if (match) fks.push(match[0]);
       }
     }
-    const allDefs = [...colDefs, ...fkDefs];
+    const allDefs = [...colDefs, ...fks];
     statements.push(`CREATE TABLE IF NOT EXISTS ${tableName} (
   ${allDefs.join(",\n  ")}
 );`);
   }
   return [...statements, ...indexStatements];
 }
+function calculateHash(definition) {
+  const str = JSON.stringify(definition, (key, value) => {
+    if (value instanceof ColumnBuilder) return value.build();
+    return value;
+  });
+  return createHash("sha256").update(str).digest("hex");
+}
 async function pushSchema(definition, url) {
-  const statements = buildSchemaSQL(definition);
-  for (const sql of statements) {
-    await runQuery(sql, [], url);
+  const currentHash = calculateHash(definition);
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS _kadak_migrations (
+      id SERIAL PRIMARY KEY,
+      hash TEXT NOT NULL,
+      executed_at TIMESTAMP DEFAULT NOW()
+    );
+  `, [], url);
+  await runQuery(`CREATE UNIQUE INDEX IF NOT EXISTS _kadak_migrations_hash_idx ON _kadak_migrations (hash)`, [], url);
+  const existing = await runQuery(`SELECT id FROM _kadak_migrations WHERE hash = $1`, [currentHash], url);
+  if (existing.length > 0) {
+    console.log("\u2139\uFE0F [Kadak] No changes detected. Schema is up to date.");
+    return;
+  }
+  const existingTablesRes = await runQuery(`
+    SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
+  `, [], url);
+  const existingTables = new Set(existingTablesRes.map((r) => r.table_name));
+  const statements = [];
+  const indexStatements = [];
+  for (const [tableName, columns] of Object.entries(definition)) {
+    if (!existingTables.has(tableName)) {
+      console.log(`\u2728 [Kadak] New table detected: ${tableName}`);
+      const subDef = { [tableName]: columns };
+      statements.push(...buildSchemaSQL(subDef));
+    } else {
+      const existingColsRes = await runQuery(`
+        SELECT column_name FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = $1
+      `, [tableName], url);
+      const existingCols = new Set(existingColsRes.map((r) => r.column_name));
+      for (const [colName, rawDef] of Object.entries(columns)) {
+        if (!existingCols.has(colName)) {
+          const { columnSQL, fkSQL } = generateColumnSQL(colName, rawDef, tableName, indexStatements);
+          if (columnSQL) {
+            console.log(`\u2795 [Kadak] New column detected: ${tableName}.${colName}`);
+            statements.push(`ALTER TABLE ${tableName} ADD COLUMN ${columnSQL};`);
+          }
+          if (fkSQL) statements.push(fkSQL + ";");
+        }
+      }
+    }
+  }
+  const allSql = [...statements, ...indexStatements];
+  if (allSql.length > 0) {
+    for (const sql of allSql) {
+      await runQuery(sql, [], url);
+    }
+    await runQuery(`INSERT INTO _kadak_migrations (hash) VALUES ($1)`, [currentHash], url);
+    console.log("\u2705 [Kadak] Schema migration applied successfully.");
+  } else {
+    await runQuery(`INSERT INTO _kadak_migrations (hash) VALUES ($1)`, [currentHash], url);
+    console.log("\u2139\uFE0F [Kadak] Migration metadata updated.");
   }
 }
 
@@ -318,7 +507,7 @@ var kadak = (config) => {
       try {
         rows = await runQuery(sql, values, _url);
       } catch (e) {
-        if (options.debug) console.error("Execution failed:", e.message);
+        if (options.debug) console.error("\u274C Kadak Execution Error:", e.message);
         rows = [];
       }
       const normalized = normalize(rows, ast, _currentSchema);
@@ -341,20 +530,16 @@ var kadak = (config) => {
         const columns = table.config.columns;
         _rawDefinition[tableName] = columns;
         _currentSchema[tableName] = {};
-        for (const [col, def] of Object.entries(columns)) {
-          if (typeof def === "object" && def !== null) {
-            const colObj = def;
-            if (colObj.ref) {
-              _currentSchema[tableName][col] = `${colObj.ref}.id`;
-            } else {
-              _currentSchema[tableName][col] = col;
-            }
-          } else if (typeof def === "string" && def.startsWith("ref:")) {
-            _currentSchema[tableName][col] = `${def.split(":")[1]}.id`;
-          } else if (typeof def === "string" && def.includes(".")) {
-            _currentSchema[tableName][col] = def;
+        for (const [col, rawDef] of Object.entries(columns)) {
+          const def = rawDef instanceof ColumnBuilder ? rawDef.build() : typeof rawDef === "string" ? { type: rawDef } : rawDef;
+          if (def.ref) {
+            _currentSchema[tableName][col] = `${def.ref}.id`;
+          } else if (typeof rawDef === "string" && rawDef.startsWith("ref:")) {
+            _currentSchema[tableName][col] = `${rawDef.split(":")[1]}.id`;
+          } else if (typeof rawDef === "string" && rawDef.includes(".")) {
+            _currentSchema[tableName][col] = rawDef;
           } else {
-            _currentSchema[tableName][col] = col;
+            _currentSchema[tableName][col] = def;
           }
         }
       }
@@ -366,6 +551,70 @@ var kadak = (config) => {
       }
       await pushSchema(_rawDefinition, _url);
     },
+    async insert(table, data2) {
+      const tableName = String(table);
+      const tableSchema = _currentSchema[tableName];
+      if (!tableSchema) {
+        throw new Error(`\u274C Kadak Error: Table '${tableName}' not found in defined schema.`);
+      }
+      for (const field of Object.keys(data2)) {
+        if (field !== "id" && !tableSchema[field]) {
+          throw new Error(`\u274C Kadak Error: Invalid field '${field}' on table '${tableName}'.`);
+        }
+      }
+      const { sql, values } = buildInsertSQL(tableName, data2);
+      const rows = await runQuery(sql, values, _url);
+      const ast = { root: tableName, relations: [] };
+      return normalize(rows, ast, _currentSchema)[0];
+    },
+    async update(table, options) {
+      const tableName = String(table);
+      const tableSchema = _currentSchema[tableName];
+      if (!tableSchema) {
+        throw new Error(`\u274C Kadak Error: Table '${tableName}' not found in defined schema.`);
+      }
+      if (!options.where || Object.keys(options.where).length === 0) {
+        throw new Error(`\u274C Kadak Error: Update mutation requires a 'where' clause.`);
+      }
+      for (const [col, def] of Object.entries(tableSchema)) {
+        if (typeof def === "object" && def !== null && def.autoUpdate) {
+          options.data[col] = "NOW()";
+        }
+      }
+      for (const field of Object.keys(options.data)) {
+        if (field !== "id" && !tableSchema[field]) {
+          throw new Error(`\u274C Kadak Error: Invalid field '${field}' on table '${tableName}'.`);
+        }
+      }
+      for (const field of Object.keys(options.where)) {
+        if (field !== "id" && !tableSchema[field]) {
+          throw new Error(`\u274C Kadak Error: Invalid filter field '${field}' on table '${tableName}'.`);
+        }
+      }
+      const { sql, values } = buildUpdateSQL(tableName, options.where, options.data);
+      const rows = await runQuery(sql, values, _url);
+      const ast = { root: tableName, relations: [] };
+      return normalize(rows, ast, _currentSchema);
+    },
+    async delete(table, options) {
+      const tableName = String(table);
+      const tableSchema = _currentSchema[tableName];
+      if (!tableSchema) {
+        throw new Error(`\u274C Kadak Error: Table '${tableName}' not found in defined schema.`);
+      }
+      if (!options.where || Object.keys(options.where).length === 0) {
+        throw new Error(`\u274C Kadak Error: Delete mutation requires a 'where' clause.`);
+      }
+      for (const field of Object.keys(options.where)) {
+        if (field !== "id" && !tableSchema[field]) {
+          throw new Error(`\u274C Kadak Error: Invalid filter field '${field}' on table '${tableName}'.`);
+        }
+      }
+      const { sql, values } = buildDeleteSQL(tableName, options.where);
+      const rows = await runQuery(sql, values, _url);
+      const ast = { root: tableName, relations: [] };
+      return normalize(rows, ast, _currentSchema);
+    },
     data,
     close: closePool
   };
@@ -374,13 +623,18 @@ var kadak = (config) => {
 kadak.table = (config) => {
   return { config };
 };
+kadak.t = t;
 export {
   buildAST,
+  buildDeleteSQL,
+  buildInsertSQL,
   buildPlan,
+  buildUpdateSQL,
   closePool,
   compileSQL,
   kadak,
   normalize,
-  runQuery
+  runQuery,
+  t
 };
 //# sourceMappingURL=index.js.map

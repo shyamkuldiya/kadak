@@ -13,6 +13,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./client": {
+      "types": "./dist/exec/client.d.ts",
+      "import": "./dist/exec/client.js",
+      "require": "./dist/exec/client.cjs"
     }
   },
   "scripts": {

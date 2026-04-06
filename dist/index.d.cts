@@ -1,5 +1,7 @@
+export { closePool, runQuery } from './exec/client.cjs';
+
 type ColumnObject = {
-    type?: "string" | "varchar" | "int" | "text" | "jsonb" | string;
+    type?: "string" | "varchar" | "int" | "text" | "jsonb" | "timestamp" | string;
     ref?: string;
     unique?: boolean;
     nullable?: boolean;
@@ -7,6 +9,7 @@ type ColumnObject = {
     length?: number;
     onDelete?: "cascade" | "restrict" | "set null" | "no action";
     index?: boolean;
+    autoUpdate?: boolean;
 };
 type ColumnDef = string | ColumnObject;
 interface TableConfig<N extends string = string, C extends Record<string, ColumnDef> = Record<string, ColumnDef>> {
@@ -16,6 +19,32 @@ interface TableConfig<N extends string = string, C extends Record<string, Column
 interface Table<N extends string = string, C extends Record<string, ColumnDef> = Record<string, ColumnDef>> {
     config: TableConfig<N, C>;
 }
+declare class ColumnBuilder {
+    private obj;
+    constructor(type?: ColumnObject["type"]);
+    default(val: any): this;
+    defaultNow(): this;
+    unique(): this;
+    nullable(val?: boolean): this;
+    notNull(): this;
+    length(val: number): this;
+    onDelete(val: ColumnObject["onDelete"]): this;
+    index(): this;
+    build(): ColumnObject;
+}
+declare const t: {
+    string: () => ColumnBuilder;
+    varchar: (len?: number) => ColumnBuilder;
+    int: () => ColumnBuilder;
+    text: () => ColumnBuilder;
+    jsonb: () => ColumnBuilder;
+    timestamp: () => ColumnBuilder;
+    ref: (table: string) => ColumnBuilder;
+    timestamps: () => {
+        createdAt: ColumnObject;
+        updatedAt: ColumnObject;
+    };
+};
 
 type Predicate = {
     field: string;
@@ -56,15 +85,25 @@ type Compiled = {
 };
 declare function compileSQL(plan: Plan, schema: Record<string, Record<string, any>>): Compiled;
 
-declare function runQuery(sql: string, values: unknown[], url?: string): Promise<any[]>;
-declare function closePool(): Promise<void>;
-
 /**
  * Normalizes flat SQL rows into a nested object graph based on the AST structure.
  * Groups by 'id' and avoids duplicates.
- * All columns are expected to be aliased as 'tableId__columnName'.
+ * Supports both aliased (table__col) and raw rows (for mutations).
  */
 declare function normalize(rows: any[], ast: QueryAST, schema: Record<string, Record<string, any>>): any[];
+
+declare function buildInsertSQL(table: string, data: Record<string, any>): {
+    sql: string;
+    values: any[];
+};
+declare function buildUpdateSQL(table: string, where: Record<string, any>, data: Record<string, any>): {
+    sql: string;
+    values: any[];
+};
+declare function buildDeleteSQL(table: string, where: Record<string, any>): {
+    sql: string;
+    values: any[];
+};
 
 type KadakConfig = {
     url: string;
@@ -91,6 +130,18 @@ type TableQuery<S, T extends keyof S> = {
 } & {
     [K in keyof S[T]]?: RelationName<S[T][K]> extends keyof S ? TableQuery<S, RelationName<S[T][K]>> | true : any;
 };
+type TableInsert<S, T extends keyof S> = {
+    [K in keyof S[T]]?: any;
+} & {
+    id?: any;
+};
+type TableUpdate<S, T extends keyof S> = {
+    where: Record<string, any>;
+    data: Partial<TableInsert<S, T>>;
+};
+type TableDelete<S, T extends keyof S> = {
+    where: Record<string, any>;
+};
 type InferredQuery<S> = {
     [K in keyof S]?: TableQuery<S, K>;
 };
@@ -102,11 +153,27 @@ interface KadakInstance<S extends Record<string, any> = any> {
     data<T = any>(input: InferredQuery<S>, options?: {
         debug?: boolean;
     }): KadakQuery<T>;
+    insert<T extends keyof S>(table: T, data: TableInsert<S, T>): Promise<any>;
+    update<T extends keyof S>(table: T, options: TableUpdate<S, T>): Promise<any[]>;
+    delete<T extends keyof S>(table: T, options: TableDelete<S, T>): Promise<any[]>;
     close(): Promise<void>;
 }
 declare const kadak: {
     (config: KadakConfig): KadakInstance<any>;
     table<N extends string, C extends Record<string, any>>(config: TableConfig<N, C>): Table<N, C>;
+    t: {
+        string: () => ColumnBuilder;
+        varchar: (len?: number) => ColumnBuilder;
+        int: () => ColumnBuilder;
+        text: () => ColumnBuilder;
+        jsonb: () => ColumnBuilder;
+        timestamp: () => ColumnBuilder;
+        ref: (table: string) => ColumnBuilder;
+        timestamps: () => {
+            createdAt: ColumnObject;
+            updatedAt: ColumnObject;
+        };
+    };
 };
 
-export { type Compiled, type InferredQuery, type KadakConfig, type KadakInstance, type KadakQuery, type OrderBy, type Plan, type Predicate, type QueryAST, type RelationAST, buildAST, buildPlan, closePool, compileSQL, kadak, normalize, runQuery };
+export { type Compiled, type InferredQuery, type KadakConfig, type KadakInstance, type KadakQuery, type OrderBy, type Plan, type Predicate, type QueryAST, type RelationAST, buildAST, buildDeleteSQL, buildInsertSQL, buildPlan, buildUpdateSQL, compileSQL, kadak, normalize, t };

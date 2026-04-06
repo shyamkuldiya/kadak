@@ -126,29 +126,31 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
       await pushSchema(_rawDefinition, _url);
     },
 
-    async insert(table: string, data: Record<string, any>) {
-      const tableSchema = _currentSchema[table];
+    async insert<T extends keyof any>(table: T, data: any) {
+      const tableName = String(table);
+      const tableSchema = _currentSchema[tableName];
       if (!tableSchema) {
-        throw new Error(`❌ Kadak Error: Table '${table}' not found in defined schema.`);
+        throw new Error(`❌ Kadak Error: Table '${tableName}' not found in defined schema.`);
       }
 
       for (const field of Object.keys(data)) {
         if (field !== "id" && !tableSchema[field]) {
-          throw new Error(`❌ Kadak Error: Invalid field '${field}' on table '${table}'.`);
+          throw new Error(`❌ Kadak Error: Invalid field '${field}' on table '${tableName}'.`);
         }
       }
 
-      const { sql, values } = buildInsertSQL(table, data);
+      const { sql, values } = buildInsertSQL(tableName, data);
       const rows = await runQuery(sql, values, _url);
       
-      const ast = { root: table, relations: [] };
+      const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema)[0];
     },
 
-    async update(table: string, options: { where: Record<string, any>, data: Record<string, any> }) {
-      const tableSchema = _currentSchema[table];
+    async update<T extends keyof any>(table: T, options: any) {
+      const tableName = String(table);
+      const tableSchema = _currentSchema[tableName];
       if (!tableSchema) {
-        throw new Error(`❌ Kadak Error: Table '${table}' not found in defined schema.`);
+        throw new Error(`❌ Kadak Error: Table '${tableName}' not found in defined schema.`);
       }
 
       if (!options.where || Object.keys(options.where).length === 0) {
@@ -163,27 +165,28 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
 
       for (const field of Object.keys(options.data)) {
         if (field !== "id" && !tableSchema[field]) {
-          throw new Error(`❌ Kadak Error: Invalid field '${field}' on table '${table}'.`);
+          throw new Error(`❌ Kadak Error: Invalid field '${field}' on table '${tableName}'.`);
         }
       }
 
       for (const field of Object.keys(options.where)) {
         if (field !== "id" && !tableSchema[field]) {
-          throw new Error(`❌ Kadak Error: Invalid filter field '${field}' on table '${table}'.`);
+          throw new Error(`❌ Kadak Error: Invalid filter field '${field}' on table '${tableName}'.`);
         }
       }
 
-      const { sql, values } = buildUpdateSQL(table, options.where, options.data);
+      const { sql, values } = buildUpdateSQL(tableName, options.where, options.data);
       const rows = await runQuery(sql, values, _url);
       
-      const ast = { root: table, relations: [] };
+      const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema);
     },
 
-    async delete(table: string, options: { where: Record<string, any> }) {
-      const tableSchema = _currentSchema[table];
+    async delete<T extends keyof any>(table: T, options: any) {
+      const tableName = String(table);
+      const tableSchema = _currentSchema[tableName];
       if (!tableSchema) {
-        throw new Error(`❌ Kadak Error: Table '${table}' not found in defined schema.`);
+        throw new Error(`❌ Kadak Error: Table '${tableName}' not found in defined schema.`);
       }
 
       if (!options.where || Object.keys(options.where).length === 0) {
@@ -192,14 +195,14 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
 
       for (const field of Object.keys(options.where)) {
         if (field !== "id" && !tableSchema[field]) {
-          throw new Error(`❌ Kadak Error: Invalid filter field '${field}' on table '${table}'.`);
+          throw new Error(`❌ Kadak Error: Invalid filter field '${field}' on table '${tableName}'.`);
         }
       }
 
-      const { sql, values } = buildDeleteSQL(table, options.where);
+      const { sql, values } = buildDeleteSQL(tableName, options.where);
       const rows = await runQuery(sql, values, _url);
       
-      const ast = { root: table, relations: [] };
+      const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema);
     },
 

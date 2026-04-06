@@ -100,31 +100,37 @@ export const t = {
 };
 // -----------------------------
 
-function generateColumnSQL(colName: string, rawDef: ColumnDef, tableName: string, indexStatements: string[]): { columnSQL: string, fkSQL?: string } {
-  const def: ColumnObject = (rawDef instanceof ColumnBuilder) ? rawDef.build() : (typeof rawDef === "string" ? { type: rawDef } : rawDef);
+function generateColumnSQL(colName: string, rawDef: any, tableName: string, indexStatements: string[]): { columnSQL: string | null, fkSQL?: string } {
+  // Ignore virtual relations (string mapping like "other.id") for migration
+  if (typeof rawDef === "string" && rawDef.includes(".")) {
+    return { columnSQL: null };
+  }
+
+  // Safe extraction: check for .build() method to support fluent API even if instanceof fails
+  const def: ColumnObject = typeof rawDef?.build === "function" 
+    ? rawDef.build() 
+    : (typeof rawDef === "string" ? { type: rawDef } : rawDef);
   
   let typeStr = "";
   let constraints = "";
   let refTable = "";
   let onDelete = "";
 
-  const shorthand = typeof rawDef === "string" ? rawDef : "";
-
   // 1. Resolve Type
-  if (shorthand === "string" || def.type === "string") {
+  if (def.type === "string") {
     typeStr = "VARCHAR(255)";
   } else if (def.type === "varchar") {
     typeStr = `VARCHAR(${def.length || 255})`;
-  } else if (shorthand === "int" || def.type === "int") {
+  } else if (def.type === "int") {
     typeStr = "INTEGER";
-  } else if (shorthand === "text" || def.type === "text") {
+  } else if (def.type === "text") {
     typeStr = "TEXT";
-  } else if (shorthand === "jsonb" || def.type === "jsonb") {
+  } else if (def.type === "jsonb") {
     typeStr = "JSONB";
-  } else if (shorthand === "timestamp" || def.type === "timestamp") {
+  } else if (def.type === "timestamp") {
     typeStr = "TIMESTAMP";
-  } else if (shorthand.startsWith("ref:")) {
-    refTable = shorthand.split(":")[1];
+  } else if (typeof rawDef === "string" && rawDef.startsWith("ref:")) {
+    refTable = rawDef.split(":")[1];
     typeStr = "INTEGER";
   } else if (def.ref) {
     refTable = def.ref;
@@ -186,20 +192,26 @@ function calculateHash(definition: SchemaDefinition): string {
 export async function pushSchema(definition: SchemaDefinition, url: string) {
   const currentHash = calculateHash(definition);
 
+  // 1. Ensure migrations table exists
   await runQuery(`
     CREATE TABLE IF NOT EXISTS _kadak_migrations (
       id SERIAL PRIMARY KEY,
-      hash TEXT NOT NULL UNIQUE,
+      hash TEXT NOT NULL,
       executed_at TIMESTAMP DEFAULT NOW()
     );
   `, [], url);
+  
+  // Ensure unique index separately to avoid syntax error issues in some environments
+  await runQuery(`CREATE UNIQUE INDEX IF NOT EXISTS _kadak_migrations_hash_idx ON _kadak_migrations (hash)`, [], url);
 
+  // 2. Check if hash exists
   const existing = await runQuery(`SELECT id FROM _kadak_migrations WHERE hash = $1`, [currentHash], url);
   if (existing.length > 0) {
     console.log("ℹ️ [Kadak] No changes detected. Schema is up to date.");
     return;
   }
 
+  // 3. Incremental Update: Introspect existing tables/columns
   const existingTablesRes = await runQuery(`
     SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
   `, [], url);
@@ -214,6 +226,7 @@ export async function pushSchema(definition: SchemaDefinition, url: string) {
       const subDef: SchemaDefinition = { [tableName]: columns };
       statements.push(...buildSchemaSQL(subDef));
     } else {
+      // Table exists, check for new columns
       const existingColsRes = await runQuery(`
         SELECT column_name FROM information_schema.columns 
         WHERE table_schema = 'public' AND table_name = $1
@@ -222,23 +235,28 @@ export async function pushSchema(definition: SchemaDefinition, url: string) {
 
       for (const [colName, rawDef] of Object.entries(columns)) {
         if (!existingCols.has(colName)) {
-          console.log(`➕ [Kadak] New column detected: ${tableName}.${colName}`);
           const { columnSQL, fkSQL } = generateColumnSQL(colName, rawDef, tableName, indexStatements);
-          statements.push(`ALTER TABLE ${tableName} ADD COLUMN ${columnSQL};`);
+          if (columnSQL) {
+            console.log(`➕ [Kadak] New column detected: ${tableName}.${colName}`);
+            statements.push(`ALTER TABLE ${tableName} ADD COLUMN ${columnSQL};`);
+          }
           if (fkSQL) statements.push(fkSQL + ";");
         }
       }
     }
   }
 
+  // Combine and execute
   const allSql = [...statements, ...indexStatements];
   if (allSql.length > 0) {
     for (const sql of allSql) {
       await runQuery(sql, [], url);
     }
+    // 4. Record new hash
     await runQuery(`INSERT INTO _kadak_migrations (hash) VALUES ($1)`, [currentHash], url);
     console.log("✅ [Kadak] Schema migration applied successfully.");
   } else {
+    // If no SQL was generated but hash was different (shouldn't happen with our logic but for safety)
     await runQuery(`INSERT INTO _kadak_migrations (hash) VALUES ($1)`, [currentHash], url);
     console.log("ℹ️ [Kadak] Migration metadata updated.");
   }
