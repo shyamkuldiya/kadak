@@ -666,7 +666,7 @@ var kadak = ((config) => {
   let _currentSchema = {};
   let _rawDefinition = {};
   const _url = config.url;
-  const data = (input, options = {}) => {
+  const data = ((input, options = {}) => {
     const resolvedUrl = _url || process.env.DATABASE_URL;
     validateInput(input, _currentSchema);
     const ast = buildAST(input);
@@ -692,12 +692,12 @@ var kadak = ((config) => {
     };
     queryObj.trace = () => ({ ast, plan, sql, values });
     return queryObj;
-  };
+  });
   const dbClient = {
     get schema() {
       return _rawDefinition;
     },
-    define(tables) {
+    define: ((tables) => {
       for (const [key, table] of Object.entries(tables)) {
         const tableName = table.config.name;
         const columns = table.config.columns;
@@ -735,7 +735,7 @@ var kadak = ((config) => {
         }
       }
       return dbClient;
-    },
+    }),
     async push() {
       const resolvedUrl = _url || process.env.DATABASE_URL;
       if (process.env.NODE_ENV === "production") {

@@ -22,26 +22,36 @@ const posts = kadak.table({
 
 const typedDb = db.define({ users, posts });
 
-typedDb.data({
-  users: {
-    select: {
-      name: true,
-      email: true
-    }
-  },
+const usersQuery = typedDb.data({
+  users: true,
+});
+
+const usersResult: Promise<{
+  users: Array<{
+    name: string;
+    email: string;
+    createdAt: string;
+  }>;
+}> = usersQuery;
+
+const postsQuery = typedDb.data({
   posts: {
-    select: {
-      title: true,
-      body: true
-    },
-    author: {
-      select: {
-        name: true,
-        email: true
-      }
-    }
+    author: true
   }
 });
+
+const postsResult: Promise<{
+  posts: Array<{
+    title: string;
+    body: string;
+    authorId: number;
+    author: {
+      name: string;
+      email: string;
+      createdAt: string;
+    };
+  }>;
+}> = postsQuery;
 
 // @ts-expect-error invalid table should fail
 typedDb.data({ comments: {} });
