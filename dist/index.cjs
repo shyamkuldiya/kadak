@@ -279,7 +279,7 @@ function processRelations(parentTable, parentObj, row, relations, schema) {
     const prefix = `${rel.name}__`;
     const relId = row[`${prefix}id`];
     if (relId === null || relId === void 0) {
-      if (!parentObj.hasOwnProperty(rel.name)) {
+      if (!Object.prototype.hasOwnProperty.call(parentObj, rel.name)) {
         parentObj[rel.name] = isOneToMany ? [] : null;
       }
       continue;
@@ -293,9 +293,9 @@ function processRelations(parentTable, parentObj, row, relations, schema) {
     }
     if (!relObj) {
       relObj = { id: relId };
-      for (const [key, val] of Object.entries(row)) {
+      for (const [key] of Object.entries(row)) {
         if (key.startsWith(prefix) && key !== `${prefix}id`) {
-          relObj[key.replace(prefix, "")] = val;
+          relObj[key.replace(prefix, "")] = row[key];
         }
       }
       if (isOneToMany) {
@@ -518,7 +518,7 @@ var types = {
     return b;
   },
   timestamps: () => ({
-    createdAt: new ColumnBuilder("timestamp").defaultNow().build(),
+    createdAt: new ColumnBuilder("timestamp").defaultNow(),
     updatedAt: { type: "timestamp", default: "NOW()", autoUpdate: true }
   })
 };
@@ -526,7 +526,8 @@ function generateColumnSQL(colName, rawDef, tableName, indexStatements) {
   if (typeof rawDef === "string" && rawDef.includes(".")) {
     return { columnSQL: null };
   }
-  const def = typeof rawDef?.build === "function" ? rawDef.build() : typeof rawDef === "string" ? { type: rawDef } : rawDef;
+  const builder = rawDef;
+  const def = typeof builder?.build === "function" ? builder.build() : typeof rawDef === "string" ? { type: rawDef } : rawDef;
   let typeStr = "";
   let constraints = "";
   let refTable = "";
@@ -840,7 +841,7 @@ var kadak = ((config) => {
   return dbClient;
 });
 kadak.table = (config) => {
-  return { config };
+  return { config, columns: config.columns };
 };
 kadak.types = types;
 // Annotate the CommonJS export names for ESM import in node:

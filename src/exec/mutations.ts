@@ -1,6 +1,6 @@
-export function buildInsertSQL(table: string, data: Record<string, any>): { sql: string; values: any[] } {
+export function buildInsertSQL(table: string, data: Record<string, unknown>): { sql: string; values: unknown[] } {
   const fields: string[] = [];
-  const values: any[] = [];
+  const values: unknown[] = [];
   const valuePlaceholders: string[] = [];
 
   const entries = Object.entries(data);
@@ -24,8 +24,8 @@ export function buildInsertSQL(table: string, data: Record<string, any>): { sql:
   return { sql, values };
 }
 
-export function buildUpdateSQL(table: string, where: Record<string, any>, data: Record<string, any>): { sql: string; values: any[] } {
-  const values: any[] = [];
+export function buildUpdateSQL(table: string, where: Record<string, unknown>, data: Record<string, unknown>): { sql: string; values: unknown[] } {
+  const values: unknown[] = [];
   
   const setClauses: string[] = [];
   Object.entries(data).forEach(([field, val]) => {
@@ -48,7 +48,7 @@ export function buildUpdateSQL(table: string, where: Record<string, any>, data: 
   return { sql, values };
 }
 
-export function buildDeleteSQL(table: string, where: Record<string, any>): { sql: string; values: any[] } {
+export function buildDeleteSQL(table: string, where: Record<string, unknown>): { sql: string; values: unknown[] } {
   const whereFields = Object.keys(where);
   const whereValues = Object.values(where);
 

@@ -24,7 +24,15 @@ export type ColumnObject = {
   autoUpdate?: boolean; // For updatedAt
 };
 
-export type ColumnDef = string | ColumnObject | ColumnBuilder;
+export type Column<T = unknown> = {
+  __type: T;
+};
+
+export type ColumnDef = string | ColumnObject | ColumnBuilder | Column<unknown>;
+
+export type InferColumns<T> = {
+  [K in keyof T]: T[K] extends Column<infer U> ? U : never;
+};
 
 export interface TableConfig<N extends string = string, C extends Record<string, ColumnDef> = Record<string, ColumnDef>> {
   name: N;
@@ -33,6 +41,7 @@ export interface TableConfig<N extends string = string, C extends Record<string,
 
 export interface Table<N extends string = string, C extends Record<string, ColumnDef> = Record<string, ColumnDef>> {
   config: TableConfig<N, C>;
+  columns: C;
 }
 
 export type SchemaDefinition = Record<string, Record<string, ColumnDef>>;
@@ -107,13 +116,13 @@ export class ColumnBuilder<T extends ColumnObject = ColumnObject> {
 }
 
 export const types = {
-  string: () => new ColumnBuilder<{ type: "string" }>("string"),
-  varchar: (len?: number) => new ColumnBuilder<{ type: "varchar"; length?: number }>("varchar").length(len || 255),
-  int: () => new ColumnBuilder<{ type: "int" }>("int"),
-  text: () => new ColumnBuilder<{ type: "text" }>("text"),
-  jsonb: () => new ColumnBuilder<{ type: "jsonb" }>("jsonb"),
-  timestamp: () => new ColumnBuilder<{ type: "timestamp" }>("timestamp"),
-  array: <T extends "string" | "int">(innerType: ColumnBuilder<{ type: T }>) => {
+  string: () => new ColumnBuilder<{ type: "string" }>("string") as ColumnBuilder<{ type: "string" }> & Column<string>,
+  varchar: (len?: number) => new ColumnBuilder<{ type: "varchar"; length?: number }>("varchar").length(len || 255) as ColumnBuilder<{ type: "varchar"; length?: number }> & Column<string>,
+  int: () => new ColumnBuilder<{ type: "int" }>("int") as ColumnBuilder<{ type: "int" }> & Column<number>,
+  text: () => new ColumnBuilder<{ type: "text" }>("text") as ColumnBuilder<{ type: "text" }> & Column<string>,
+  jsonb: () => new ColumnBuilder<{ type: "jsonb" }>("jsonb") as ColumnBuilder<{ type: "jsonb" }> & Column<unknown>,
+  timestamp: () => new ColumnBuilder<{ type: "timestamp" }>("timestamp") as ColumnBuilder<{ type: "timestamp" }> & Column<string>,
+  array: <T extends "string" | "int">(innerType: ColumnBuilder<{ type: T }> & Column<T extends "string" ? string : number>) => {
     const built = typeof innerType?.build === "function" ? innerType.build() : innerType;
     const inner = built as ColumnObject;
     if (!inner || (inner.type !== "string" && inner.type !== "int")) {
@@ -121,7 +130,7 @@ export const types = {
     }
     const b = new ColumnBuilder<{ type: "array"; array: { type: T } }>("array");
     b.obj.array = { type: inner.type as T };
-    return b;
+    return b as ColumnBuilder<{ type: "array"; array: { type: T } }> & Column<T extends "string" ? string[] : number[]>;
   },
   ref: <const TableName extends string, const RelationName extends string, const To extends string = "id">(
     table: TableName,
@@ -133,25 +142,26 @@ export const types = {
     const b = new ColumnBuilder<{ type: "int"; ref: { table: TableName; as: RelationName; to: To } }>();
     b.obj.ref = { table, as: opts.as, to: (opts.to || "id") as To };
     b.obj.type = "int"; // Refs are integers
-    return b;
+    return b as ColumnBuilder<{ type: "int"; ref: { table: TableName; as: RelationName; to: To } }> & Column<number>;
   },
   timestamps: () => ({
-    createdAt: new ColumnBuilder("timestamp").defaultNow().build(),
-    updatedAt: { type: "timestamp", default: "NOW()", autoUpdate: true } as ColumnObject
+    createdAt: new ColumnBuilder("timestamp").defaultNow() as ColumnBuilder<{ type: "timestamp" }> & Column<string>,
+    updatedAt: { type: "timestamp", default: "NOW()", autoUpdate: true } as Column<string> & ColumnObject
   })
 };
 // -----------------------------
 
-function generateColumnSQL(colName: string, rawDef: any, tableName: string, indexStatements: string[]): { columnSQL: string | null, fkSQL?: string } {
+function generateColumnSQL(colName: string, rawDef: unknown, tableName: string, indexStatements: string[]): { columnSQL: string | null, fkSQL?: string } {
   // Ignore virtual relations (string mapping like "other.id") for migration
   if (typeof rawDef === "string" && rawDef.includes(".")) {
     return { columnSQL: null };
   }
 
   // Safe extraction: check for .build() method to support fluent API even if instanceof fails
-  const def: ColumnObject = typeof rawDef?.build === "function" 
-    ? rawDef.build() 
-    : (typeof rawDef === "string" ? { type: rawDef } : rawDef);
+  const builder = rawDef as { build?: () => ColumnObject } | undefined;
+  const def: ColumnObject = typeof builder?.build === "function" 
+    ? builder.build() 
+    : (typeof rawDef === "string" ? { type: rawDef } : rawDef as ColumnObject);
   
   let typeStr = "";
   let constraints = "";
@@ -269,7 +279,7 @@ export async function pushSchema(definition: SchemaDefinition, url: string) {
   const existingTablesRes = await runQuery(`
     SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
   `, [], url);
-  const existingTables = new Set(existingTablesRes.map((r: any) => r.table_name));
+  const existingTables = new Set((existingTablesRes as Array<{ table_name: string }>).map((r) => r.table_name));
 
   const statements: string[] = [];
   const indexStatements: string[] = [];
@@ -285,7 +295,7 @@ export async function pushSchema(definition: SchemaDefinition, url: string) {
         SELECT column_name FROM information_schema.columns 
         WHERE table_schema = 'public' AND table_name = $1
       `, [tableName], url);
-      const existingCols = new Set(existingColsRes.map((r: any) => r.column_name));
+      const existingCols = new Set((existingColsRes as Array<{ column_name: string }>).map((r) => r.column_name));
 
       for (const [colName, rawDef] of Object.entries(columns)) {
         if (!existingCols.has(colName)) {

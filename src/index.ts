@@ -5,7 +5,7 @@ import { runQuery, closePool, getTransactionClient } from "./exec/client.js";
 import { normalize } from "./exec/normalize.js";
 import { buildInsertSQL, buildUpdateSQL, buildDeleteSQL } from "./exec/mutations.js";
 import { validateInput } from "./schema/validator.js";
-import { pushSchema, Table, TableConfig, SchemaDefinition, ColumnObject, ColumnBuilder, types } from "./schema/migrator.js";
+import { pushSchema, Table, TableConfig, SchemaDefinition, ColumnObject, ColumnBuilder, Column, InferColumns, types } from "./schema/migrator.js";
 import pg from "pg";
 
 export type KadakConfig = {
@@ -13,19 +13,24 @@ export type KadakConfig = {
 };
 
 type SchemaMap = Record<string, Record<string, unknown>>;
-type ColumnInput = string | ColumnObject | ColumnBuilder;
-type TableColumns<T> = T extends { config: { columns: infer C } } ? C : never;
+type ColumnInput = string | ColumnObject | ColumnBuilder | Column<unknown>;
+type TableColumns<T> = T extends { columns: infer C } ? C : T extends { config: { columns: infer C } } ? C : never;
 type DefinedSchema<Tables extends Record<string, Table<string, Record<string, ColumnInput>>>> = {
-  [K in keyof Tables & string]: TableColumns<Tables[K]>;
+  [K in keyof Tables & string]: TableRow<TableColumns<Tables[K]>>;
 };
 
 type BuiltColumn<C> = C extends ColumnBuilder<infer O>
   ? O
+  : C extends Column<infer U>
+    ? { __type: U }
   : C extends string
-    ? { type: C }
+    ? C extends `${string}.${string}`
+      ? { relation: C }
+      : { type: C }
     : C;
 
 type ColumnValue<C> =
+  BuiltColumn<C> extends { relation: string } ? never :
   BuiltColumn<C> extends { array: { type: "string" } } ? string[] :
   BuiltColumn<C> extends { array: { type: "int" } } ? number[] :
   BuiltColumn<C> extends { ref: unknown } ? number :
@@ -33,44 +38,53 @@ type ColumnValue<C> =
   BuiltColumn<C> extends { type: "timestamp" } ? string :
   BuiltColumn<C> extends { type: "jsonb" } ? unknown :
   BuiltColumn<C> extends { type: "text" | "string" | "varchar" } ? string :
-  unknown;
+  never;
+
+type TableRow<Columns> = {
+  id: number;
+} & {
+  [K in keyof Columns & string as ColumnValue<Columns[K]> extends never ? never : K]: ColumnValue<Columns[K]>;
+};
 
 type RelationTargetName<C> = BuiltColumn<C> extends { ref: { table: infer Table extends string } } ? Table : never;
 type RelationAlias<C> = BuiltColumn<C> extends { ref: { as: infer As extends string } } ? As : never;
 
-type RelationFromColumn<C> = BuiltColumn<C> extends { ref: { table: infer Table extends string; as: infer As extends string } }
-  ? { table: Table; as: As }
-  : never;
+type RelationFromColumn<C, K extends string> =
+  BuiltColumn<C> extends { ref: { table: infer Table extends string; as: infer As extends string } }
+    ? { table: Table; as: As }
+    : BuiltColumn<C> extends { relation: infer Rel extends string }
+      ? Rel extends `${infer Table}.${string}`
+        ? { table: Table; as: K }
+        : never
+      : never;
 
 type RelationNames<Columns> = {
-  [K in keyof Columns & string as RelationFromColumn<Columns[K]> extends never ? never : RelationFromColumn<Columns[K]>["as"]]: RelationFromColumn<Columns[K]>["table"];
+  [K in keyof Columns & string as RelationFromColumn<Columns[K], K> extends never ? never : RelationFromColumn<Columns[K], K>["as"]]: RelationFromColumn<Columns[K], K>["table"];
 };
 
 type RelationFieldNames<Columns> = keyof RelationNames<Columns> & string;
 type QueryFieldKeys<Columns> = keyof Columns & string;
 type MutationFieldKeys<Columns> = keyof Columns & string;
 
-type WhereInput<Columns> = Partial<Record<QueryFieldKeys<Columns>, unknown>> & { id?: unknown };
+type WhereInput<Columns> = Partial<{ [K in keyof Columns & string]: Columns[K] }> & { id?: number };
 type SelectInput<Columns> = Partial<Record<QueryFieldKeys<Columns>, true>>;
 type OrderByInput<Columns> = Partial<Record<QueryFieldKeys<Columns>, "asc" | "desc">>;
 
-type RelationTargetSchema<S extends SchemaMap, TableName extends keyof S, RelationName extends string> = {
-  [K in keyof S[TableName] & string]: RelationFromColumn<S[TableName][K]> extends { as: RelationName }
-    ? RelationFromColumn<S[TableName][K]>["table"] extends keyof S
-      ? RelationFromColumn<S[TableName][K]>["table"]
-      : never
-    : never;
-}[keyof S[TableName] & string];
+type RelationGraph<Tables extends Record<string, Table<string, Record<string, ColumnInput>>>> = {
+  [K in keyof Tables & string]: RelationNames<TableColumns<Tables[K]>>;
+};
 
-type QueryNode<S extends SchemaMap, TableName extends keyof S> = {
+type QueryNode<S extends SchemaMap, D extends Record<string, Record<string, string>>, TableName extends keyof S & keyof D> = {
   where?: WhereInput<S[TableName]>;
   orderBy?: OrderByInput<S[TableName]>;
   select?: SelectInput<S[TableName]>;
 } & {
-  [R in RelationFieldNames<S[TableName]>]?: QueryNode<S, RelationTargetSchema<S, TableName, R>> | true;
+  [R in keyof D[TableName] & string]?: D[TableName][R] extends keyof S
+    ? QueryNode<S, D, D[TableName][R]> | true
+    : never;
 };
 
-type RootNode<S extends SchemaMap, TableName extends keyof S> = QueryNode<S, TableName> & {
+type RootNode<S extends SchemaMap, D extends Record<string, Record<string, string>>, TableName extends keyof S & keyof D> = QueryNode<S, D, TableName> & {
   take?: number;
   skip?: number;
 };
@@ -82,9 +96,9 @@ export interface KadakQuery<T> extends Promise<T> {
 }
 
 // --- Type Inference Helpers ---
-type TableQuery<S extends SchemaMap, T extends keyof S> = RootNode<S, T>;
+type TableQuery<S extends SchemaMap, D extends Record<string, Record<string, string>>, T extends keyof S & keyof D> = RootNode<S, D, T>;
 
-type TableInsert<S extends SchemaMap, T extends keyof S> = Partial<Record<MutationFieldKeys<S[T]>, unknown>> & { id?: unknown };
+type TableInsert<S extends SchemaMap, T extends keyof S> = Partial<{ [K in keyof S[T] & string as K extends "id" ? never : K]: S[T][K] }> & { id?: number };
 
 type TableUpdate<S extends SchemaMap, T extends keyof S> = {
   where: WhereInput<S[T]>;
@@ -95,16 +109,11 @@ type TableDelete<S extends SchemaMap, T extends keyof S> = {
   where: WhereInput<S[T]>;
 };
 
-export type InferredQuery<S extends SchemaMap> = {
-  [K in keyof S]?: TableQuery<S, K>;
+export type InferredQuery<S extends SchemaMap, D extends Record<string, Record<string, string>>> = {
+  [K in keyof S & keyof D]?: TableQuery<S, D, K> | true;
 };
 
-type RelationPropName<Columns, K extends keyof Columns> = RelationAlias<Columns[K]> extends string ? RelationAlias<Columns[K]> : never;
-
-type RelationMap<S extends SchemaMap, TableName extends keyof S> = {
-  [K in keyof S[TableName] & string as RelationPropName<S[TableName], K> extends never ? never : RelationPropName<S[TableName], K>]:
-    RelationTargetName<S[TableName][K]> extends keyof S ? S[RelationTargetName<S[TableName][K]>] : never;
-};
+type RelationPropName<Columns, K extends keyof Columns> = RelationFromColumn<Columns[K], K & string> extends { as: infer As extends string } ? As : never;
 
 type ColumnSelection<Columns, Selection> = Selection extends Record<string, true>
   ? {
@@ -114,23 +123,23 @@ type ColumnSelection<Columns, Selection> = Selection extends Record<string, true
       [K in keyof Columns]: ColumnValue<Columns[K]>;
     };
 
-type RowResult<S extends SchemaMap, TableName extends keyof S, Node> =
+type RowResult<S extends SchemaMap, D extends Record<string, Record<string, string>>, TableName extends keyof S & keyof D, Node> =
   ColumnSelection<S[TableName], Node extends { select: infer Sel } ? Sel : never> &
-  RelationMapResult<S, TableName, Node>;
+  RelationMapResult<S, D, TableName, Node>;
 
-type RelationMapResult<S extends SchemaMap, TableName extends keyof S, Node> = Node extends Record<string, unknown>
+type RelationMapResult<S extends SchemaMap, D extends Record<string, Record<string, string>>, TableName extends keyof S & keyof D, Node> = Node extends Record<string, unknown>
   ? {
-      [R in RelationFieldNames<S[TableName]> as R extends keyof Node ? R : never]:
-        RelationTargetSchema<S, TableName, R> extends keyof S
+      [R in keyof D[TableName] & string as R extends keyof Node ? R : never]:
+        D[TableName][R] extends keyof S
           ? Node[R] extends true
-            ? RowResult<S, RelationTargetSchema<S, TableName, R>, true>
-            : RowResult<S, RelationTargetSchema<S, TableName, R>, Node[R]>
+            ? RowResult<S, D, D[TableName][R], true>
+            : RowResult<S, D, D[TableName][R], Node[R]>
           : never;
     }
   : {};
 
-type QueryResult<S extends SchemaMap, Q extends InferredQuery<S>> = {
-  [K in keyof Q & keyof S]: Array<RowResult<S, K, Q[K]>>;
+type QueryResult<S extends SchemaMap, D extends Record<string, Record<string, string>>, Q extends InferredQuery<S, D>> = {
+  [K in keyof Q & keyof S & keyof D]: Array<RowResult<S, D, K, Q[K]>>;
 };
 
 type RelationDefinition = {
@@ -140,17 +149,17 @@ type RelationDefinition = {
   source: string;
 };
 
-type SchemaEntry = string | Record<string, any> | RelationDefinition;
+type SchemaEntry = string | Record<string, unknown> | RelationDefinition;
 
-export interface KadakInstance<S extends SchemaMap = SchemaMap> {
+export interface KadakInstance<S extends SchemaMap = SchemaMap, D extends Record<string, Record<string, string>> = Record<string, never>> {
   readonly schema: Readonly<SchemaDefinition>;
-  define<Tables extends Record<string, Table<string, Record<string, ColumnInput>>>>(tables: Tables): KadakInstance<DefinedSchema<Tables>>;
+  define<Tables extends Record<string, Table<string, Record<string, ColumnInput>>>>(tables: Tables): KadakInstance<DefinedSchema<Tables>, RelationGraph<Tables>>;
   push(): Promise<void>;
-  data<Q extends InferredQuery<S>>(input: Q, options?: { debug?: boolean; client?: pg.PoolClient }): KadakQuery<QueryResult<S, Q>>;
+  data<Q extends InferredQuery<S, D>>(input: Q, options?: { debug?: boolean; client?: pg.PoolClient }): KadakQuery<QueryResult<S, D, Q>>;
   insert<T extends keyof S & string>(table: T, data: TableInsert<S, T>, options?: { client?: pg.PoolClient }): Promise<unknown>;
   update<T extends keyof S & string>(table: T, options: TableUpdate<S, T> & { client?: pg.PoolClient }): Promise<unknown[]>;
   delete<T extends keyof S & string>(table: T, options: TableDelete<S, T> & { client?: pg.PoolClient }): Promise<unknown[]>;
-  transaction<T>(fn: (tx: Omit<KadakInstance<S>, "schema" | "define" | "push" | "transaction" | "close">) => Promise<T>): Promise<T>;
+  transaction<T>(fn: (tx: Omit<KadakInstance<S, D>, "schema" | "define" | "push" | "transaction" | "close">) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
 
@@ -174,9 +183,9 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
     const { text: sql, values } = compileSQL(plan, ast, _currentSchema);
     
     const execution = async () => {
-      let rows: unknown[] = [];
+      let rows: Array<Record<string, unknown>> = [];
       try {
-        rows = await runQuery(sql, values, resolvedUrl, options.client);
+        rows = await runQuery(sql, values, resolvedUrl, options.client) as Array<Record<string, unknown>>;
       } catch (e) {
         if (options.debug) console.error("❌ Kadak Execution Error:", (e as Error).message);
         rows = [];
@@ -194,7 +203,7 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
     };
     queryObj.trace = () => ({ ast, plan, sql, values });
     return queryObj;
-  }) as KadakInstance<SchemaMap>["data"];
+  }) as KadakInstance<SchemaMap, Record<string, never>>["data"];
 
   const dbClient: KadakInstance = {
     get schema() {
@@ -210,7 +219,9 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
         const relationNames = new Set<string>();
         
         for (const [col, rawDef] of Object.entries(columns)) {
-          const def: ColumnObject = (rawDef instanceof ColumnBuilder) ? rawDef.build() : (typeof rawDef === "string" ? { type: rawDef } : rawDef);
+          const def: ColumnObject = (rawDef instanceof ColumnBuilder)
+            ? rawDef.build()
+            : (typeof rawDef === "string" ? { type: rawDef } : (rawDef as ColumnObject));
           
           if (def.ref) {
             const relationName = def.ref.as;
@@ -240,7 +251,7 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
           }
         }
       }
-      return dbClient as unknown as KadakInstance<DefinedSchema<Tables>>;
+      return dbClient as unknown as KadakInstance<DefinedSchema<Tables>, RelationGraph<Tables>>;
     }) as KadakInstance["define"],
 
     async push() {
@@ -340,7 +351,7 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
       try {
         await client.query("BEGIN");
         const tx = {
-          data: (input: Record<string, unknown>, opts: { debug?: boolean; client?: pg.PoolClient } = {}) => data(input as InferredQuery<SchemaMap>, { ...opts, client }),
+          data: (input: Record<string, unknown>, opts: { debug?: boolean; client?: pg.PoolClient } = {}) => data(input as InferredQuery<SchemaMap, Record<string, never>>, { ...opts, client }),
           insert: (table: string, d: Record<string, unknown>, opts: { client?: pg.PoolClient } = {}) => dbClient.insert(table, d, { ...opts, client }),
           update: (table: string, opts: { where: Record<string, unknown>; data: Record<string, unknown>; client?: pg.PoolClient }) => dbClient.update(table, { ...opts, client }),
           delete: (table: string, opts: { where: Record<string, unknown>; client?: pg.PoolClient }) => dbClient.delete(table, { ...opts, client })
@@ -367,8 +378,8 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
   return dbClient;
 }) as KadakFactory;
 
-kadak.table = <N extends string, C extends Record<string, any>>(config: TableConfig<N, C>): Table<N, C> => {
-  return { config };
+kadak.table = <N extends string, C extends Record<string, ColumnInput>>(config: TableConfig<N, C>): Table<N, C> => {
+  return { config, columns: config.columns };
 };
 
 kadak.types = types;
@@ -376,3 +387,4 @@ kadak.types = types;
 export * from "./query/index.js";
 export * from "./exec/index.js";
 export { types } from "./schema/migrator.js";
+export type { InferColumns } from "./schema/migrator.js";
