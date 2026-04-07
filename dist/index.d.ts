@@ -160,6 +160,7 @@ type InferredQuery<S> = {
     [K in keyof S]?: TableQuery<S, K>;
 };
 interface KadakInstance<S extends Record<string, any> = any> {
+    schema: Record<string, Record<string, any>>;
     define<Tables extends Record<string, Table<any, any>>>(tables: Tables): KadakInstance<{
         [K in keyof Tables]: Tables[K]["config"]["columns"];
     }>;

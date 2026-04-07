@@ -48,6 +48,7 @@ export type InferredQuery<S> = {
 };
 
 export interface KadakInstance<S extends Record<string, any> = any> {
+  schema: Record<string, Record<string, any>>;
   define<Tables extends Record<string, Table<any, any>>>(tables: Tables): KadakInstance<{
     [K in keyof Tables]: Tables[K]["config"]["columns"]
   }>;
@@ -103,6 +104,7 @@ export const kadak = ((config: KadakConfig): KadakInstance<any> => {
   };
 
   const dbClient: KadakInstance<any> = {
+    schema: _currentSchema,
     define(tables: Record<string, Table<any, any>>) {
       for (const [key, table] of Object.entries(tables)) {
         const tableName = table.config.name;
@@ -125,6 +127,7 @@ export const kadak = ((config: KadakConfig): KadakInstance<any> => {
           }
         }
       }
+      dbClient.schema = _currentSchema;
       return dbClient as any;
     },
 

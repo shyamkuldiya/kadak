@@ -1,7 +1,7 @@
 #!/usr/bin/env node
+/// <reference types="node" />
 import path from "path";
 import { pathToFileURL } from "url";
-import { kadak } from "../index.js";
 
 async function run() {
   const args = process.argv.slice(2);
@@ -23,30 +23,33 @@ async function run() {
     process.exit(1);
   }
 
-  const { url, schema } = config.default || config;
-
-  if (!url) {
-    console.error("❌ Kadak Error: 'url' property is missing in 'kadak.config.ts'");
-    process.exit(1);
-  }
-
-  if (!schema) {
-    console.error("❌ Kadak Error: 'schema' property is missing in 'kadak.config.ts'");
+  const dbClient = config.default;
+  if (!dbClient || typeof dbClient !== "object") {
+    console.error("❌ Kadak Error: 'kadak.config.ts' must default-export an initialized dbClient instance.");
     process.exit(1);
   }
 
   try {
-    const db = kadak({ url });
-    db.define(schema);
-    
+    if (typeof dbClient.push !== "function") {
+      console.error("❌ Kadak Error: Default export is not a valid dbClient instance. Missing push().");
+      process.exit(1);
+    }
+
+    if (!dbClient.schema || typeof dbClient.schema !== "object") {
+      console.error("❌ Kadak Error: Default export dbClient is missing schema metadata.");
+      process.exit(1);
+    }
+
     console.log("🚀 Kadak: Syncing schema with PostgreSQL...");
-    await db.push();
+    await dbClient.push();
     console.log("✨ Kadak: Done.");
-    
-    await db.close();
   } catch (e: any) {
     console.error(`❌ Kadak Error: Push failed - ${e.message}`);
     process.exit(1);
+  } finally {
+    if (typeof dbClient.close === "function") {
+      await dbClient.close().catch(() => {});
+    }
   }
 }
 

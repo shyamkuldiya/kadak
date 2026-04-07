@@ -536,6 +536,7 @@ var kadak = ((config) => {
     return queryObj;
   };
   const dbClient = {
+    schema: _currentSchema,
     define(tables) {
       for (const [key, table] of Object.entries(tables)) {
         const tableName = table.config.name;
@@ -555,6 +556,7 @@ var kadak = ((config) => {
           }
         }
       }
+      dbClient.schema = _currentSchema;
       return dbClient;
     },
     async push() {
