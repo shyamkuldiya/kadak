@@ -3,7 +3,7 @@
 Kadak is a PostgreSQL-first declarative data runtime that unifies schema definition, query construction, and result normalization into a single object-based language.
 
 ### Why Kadak?
-Traditional ORMs obscure SQL performance with complex abstractions. Kadak provides a lossless mapping where every object corresponds 1:1 to a PostgreSQL capability, ensuring deterministic execution.
+Traditional ORMs obscure SQL performance. Kadak provides a lossless mapping where every object corresponds 1:1 to a PostgreSQL capability, ensuring deterministic execution and predictable performance.
 
 ---
 
@@ -15,94 +15,32 @@ npm install @shyk/kadak
 
 ---
 
-### Basic Setup
+### Quick Example
 
 ```typescript
 import { kadak } from "@shyk/kadak"
 const { t } = kadak
 
-const db = kadak({ url: "postgres://..." })
+const db = kadak({ url: process.env.DATABASE_URL })
 
-// 1. Define tables with fluent API
+// 1. Define tables
 const users = kadak.table({
   name: "users",
   columns: {
-    name: t.string().default("guest"),
-    email: t.string().unique(),
-    age: t.int().default(0),
-    ...t.timestamps() // Adds createdAt and updatedAt
+    name: t.string().notNull(),
+    email: t.string().unique().notNull(),
+    ...t.timestamps()
   }
 })
 
-// 2. Register them to get a typed instance
 const k = db.define({ users })
 
-// 3. Push schema to database
-await k.push()
-```
-
----
-
-### Insert Mutation
-
-```typescript
-const alice = await k.insert("users", {
-  name: "Alice",
-  email: "alice@example.com"
-})
-
-console.log(alice) 
-// { id: 1, name: "Alice", email: "alice@example.com", createdAt: ..., updatedAt: ... }
-```
-
----
-
-### Update Mutation
-
-```typescript
-const updatedUsers = await k.update("users", {
-  where: { id: 1 },
-  data: { name: "Bob" }
-})
-
-// updatedAt is automatically updated if defined in schema
-console.log(updatedUsers) 
-```
-
----
-
-### Delete Mutation
-
-```typescript
-const deletedUsers = await k.delete("users", {
-  where: { id: 1 }
-})
-```
-
----
-
-### Basic Query
-
-```typescript
-const tasks = await k.data({
-  tasks: {
-    where: { id: 1 }
-  }
-})
-```
-
----
-
-### Nested Query
-
-Query across relations with automatic result normalization and deterministic ordering.
-
-```typescript
-const result = await k.data({
-  tasks: {
-    orderBy: { id: "desc" },
-    comments: {
-      author: true
+// 2. Query with nested relations
+const data = await k.data({
+  users: {
+    where: { id: 1 },
+    posts: {
+      comments: true
     }
   }
 })
@@ -110,65 +48,61 @@ const result = await k.data({
 
 ---
 
-### Common Patterns
+### CLI Usage
 
-#### Default Values & Timestamps
+Kadak includes a CLI for syncing your schema with the database.
+
+1. Create `kadak.config.ts` in your root:
+
 ```typescript
-t.string().default("anonymous")
-t.string().unique().notNull()
-t.int().index().default(0)
-t.timestamp().defaultNow()
-t.timestamps() // createdAt + updatedAt
+import { kadak } from "@shyk/kadak"
+const { t } = kadak
+
+const users = kadak.table({
+  name: "users",
+  columns: { name: t.string() }
+})
+
+export default {
+  url: process.env.DATABASE_URL,
+  schema: { users }
+}
 ```
 
-#### Filtering (where)
-Equality-based filtering at the root level.
-```typescript
-await k.data({
-  users: {
-    where: { email: "alice@example.com" }
-  }
-})
+2. Run the push command:
+
+```bash
+npx kadak push
 ```
 
-#### Nesting
-Fetch related data defined in your schema.
-```typescript
-await k.data({
-  posts: {
-    author: true,
-    comments: true
-  }
-})
-```
+---
 
-#### Ordering
-Stable, deterministic ordering using `asc` or `desc`.
+### Mutations
+
 ```typescript
-await k.data({
-  tasks: {
-    orderBy: { createdAt: "desc" }
-  }
+// Insert
+const user = await k.insert("users", { name: "Alice" })
+
+// Update
+await k.update("users", {
+  where: { id: 1 },
+  data: { name: "Bob" }
 })
+
+// Delete
+await k.delete("users", { where: { id: 1 } })
 ```
 
 ---
 
 ### Debugging
 
-Every query object provides introspection tools to verify generated SQL and internal state.
-
 ```typescript
-const q = k.data({ tasks: { comments: true } })
+const q = k.data({ users: true })
 
-// 1. Get compiled SQL and parameterized values
-const { sql, values } = q.toSQL()
-
-// 2. Run EXPLAIN ANALYZE on the live database
-const plan = await q.explain()
-
-// 3. View full internal lifecycle (AST -> Plan -> SQL)
-const trace = q.trace()
+console.log(q.toSQL())  // { sql, values }
+await q.explain()       // EXPLAIN ANALYZE result
+console.log(q.trace())  // Full internal state (AST, Plan, SQL)
 ```
 
 ---
@@ -176,3 +110,6 @@ const trace = q.trace()
 ### Status
 **v0.0.1 (Experimental)**  
 Kadak is in early development. The API focuses on core relational mechanics and deterministic execution.
+
+### License
+Apache-2.0

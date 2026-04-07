@@ -125,13 +125,24 @@ function compileSQL(plan, schema) {
 // src/exec/client.ts
 import pg from "pg";
 var pool = null;
-async function runQuery(sql, values, url) {
+async function runQuery(sql, values, url, client) {
+  if (client) {
+    const res2 = await client.query(sql, values);
+    return res2.rows;
+  }
   if (!pool && url) {
     pool = new pg.Pool({ connectionString: url });
   }
   if (!pool) throw new Error("Database pool not initialized");
   const res = await pool.query(sql, values);
   return res.rows;
+}
+async function getTransactionClient(url) {
+  if (!pool && url) {
+    pool = new pg.Pool({ connectionString: url });
+  }
+  if (!pool) throw new Error("Database pool not initialized");
+  return await pool.connect();
 }
 async function closePool() {
   if (pool) {
@@ -505,7 +516,7 @@ var kadak = (config) => {
     const execution = async () => {
       let rows = [];
       try {
-        rows = await runQuery(sql, values, _url);
+        rows = await runQuery(sql, values, _url, options.client);
       } catch (e) {
         if (options.debug) console.error("\u274C Kadak Execution Error:", e.message);
         rows = [];
@@ -518,7 +529,7 @@ var kadak = (config) => {
     queryObj.toSQL = () => ({ sql, values });
     queryObj.explain = async () => {
       const explainSql = `EXPLAIN ANALYZE ${sql}`;
-      return await runQuery(explainSql, values, _url);
+      return await runQuery(explainSql, values, _url, options.client);
     };
     queryObj.trace = () => ({ ast, plan, sql, values });
     return queryObj;
@@ -551,7 +562,7 @@ var kadak = (config) => {
       }
       await pushSchema(_rawDefinition, _url);
     },
-    async insert(table, data2) {
+    async insert(table, data2, options = {}) {
       const tableName = String(table);
       const tableSchema = _currentSchema[tableName];
       if (!tableSchema) {
@@ -563,7 +574,7 @@ var kadak = (config) => {
         }
       }
       const { sql, values } = buildInsertSQL(tableName, data2);
-      const rows = await runQuery(sql, values, _url);
+      const rows = await runQuery(sql, values, _url, options.client);
       const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema)[0];
     },
@@ -592,7 +603,7 @@ var kadak = (config) => {
         }
       }
       const { sql, values } = buildUpdateSQL(tableName, options.where, options.data);
-      const rows = await runQuery(sql, values, _url);
+      const rows = await runQuery(sql, values, _url, options.client);
       const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema);
     },
@@ -611,9 +622,32 @@ var kadak = (config) => {
         }
       }
       const { sql, values } = buildDeleteSQL(tableName, options.where);
-      const rows = await runQuery(sql, values, _url);
+      const rows = await runQuery(sql, values, _url, options.client);
       const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema);
+    },
+    async transaction(fn) {
+      const client = await getTransactionClient(_url);
+      try {
+        await client.query("BEGIN");
+        const tx = {
+          data: (input, opts = {}) => data(input, { ...opts, client }),
+          insert: (table, d, opts = {}) => instance.insert(table, d, { ...opts, client }),
+          update: (table, opts) => instance.update(table, { ...opts, client }),
+          delete: (table, opts) => instance.delete(table, { ...opts, client })
+        };
+        const result = await fn(tx);
+        await client.query("COMMIT");
+        return result;
+      } catch (e) {
+        try {
+          await client.query("ROLLBACK");
+        } catch (err) {
+        }
+        throw e;
+      } finally {
+        client.release();
+      }
     },
     data,
     close: closePool
@@ -632,6 +666,7 @@ export {
   buildUpdateSQL,
   closePool,
   compileSQL,
+  getTransactionClient,
   kadak,
   normalize,
   runQuery,

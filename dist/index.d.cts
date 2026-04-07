@@ -1,4 +1,5 @@
-export { closePool, runQuery } from './exec/client.cjs';
+import pg from 'pg';
+export { closePool, getTransactionClient, runQuery } from './exec/client.cjs';
 
 type ColumnObject = {
     type?: "string" | "varchar" | "int" | "text" | "jsonb" | "timestamp" | string;
@@ -152,10 +153,18 @@ interface KadakInstance<S extends Record<string, any> = any> {
     push(): Promise<void>;
     data<T = any>(input: InferredQuery<S>, options?: {
         debug?: boolean;
+        client?: pg.PoolClient;
     }): KadakQuery<T>;
-    insert<T extends keyof S>(table: T, data: TableInsert<S, T>): Promise<any>;
-    update<T extends keyof S>(table: T, options: TableUpdate<S, T>): Promise<any[]>;
-    delete<T extends keyof S>(table: T, options: TableDelete<S, T>): Promise<any[]>;
+    insert<T extends keyof S>(table: T, data: TableInsert<S, T>, options?: {
+        client?: pg.PoolClient;
+    }): Promise<any>;
+    update<T extends keyof S>(table: T, options: TableUpdate<S, T> & {
+        client?: pg.PoolClient;
+    }): Promise<any[]>;
+    delete<T extends keyof S>(table: T, options: TableDelete<S, T> & {
+        client?: pg.PoolClient;
+    }): Promise<any[]>;
+    transaction<T>(fn: (tx: Omit<KadakInstance<S>, "define" | "push" | "transaction" | "close">) => Promise<T>): Promise<T>;
     close(): Promise<void>;
 }
 declare const kadak: {

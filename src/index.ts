@@ -1,11 +1,12 @@
 import { buildAST } from "./query/builder.js";
 import { buildPlan } from "./query/planner.js";
 import { compileSQL } from "./query/compiler.js";
-import { runQuery, closePool } from "./exec/client.js";
+import { runQuery, closePool, getTransactionClient } from "./exec/client.js";
 import { normalize } from "./exec/normalize.js";
 import { buildInsertSQL, buildUpdateSQL, buildDeleteSQL } from "./exec/mutations.js";
 import { validateInput } from "./schema/validator.js";
 import { pushSchema, Table, TableConfig, SchemaDefinition, ColumnObject, ColumnBuilder, t } from "./schema/migrator.js";
+import pg from "pg";
 
 export type KadakConfig = {
   url: string;
@@ -51,10 +52,11 @@ export interface KadakInstance<S extends Record<string, any> = any> {
     [K in keyof Tables]: Tables[K]["config"]["columns"]
   }>;
   push(): Promise<void>;
-  data<T = any>(input: InferredQuery<S>, options?: { debug?: boolean }): KadakQuery<T>;
-  insert<T extends keyof S>(table: T, data: TableInsert<S, T>): Promise<any>;
-  update<T extends keyof S>(table: T, options: TableUpdate<S, T>): Promise<any[]>;
-  delete<T extends keyof S>(table: T, options: TableDelete<S, T>): Promise<any[]>;
+  data<T = any>(input: InferredQuery<S>, options?: { debug?: boolean; client?: pg.PoolClient }): KadakQuery<T>;
+  insert<T extends keyof S>(table: T, data: TableInsert<S, T>, options?: { client?: pg.PoolClient }): Promise<any>;
+  update<T extends keyof S>(table: T, options: TableUpdate<S, T> & { client?: pg.PoolClient }): Promise<any[]>;
+  delete<T extends keyof S>(table: T, options: TableDelete<S, T> & { client?: pg.PoolClient }): Promise<any[]>;
+  transaction<T>(fn: (tx: Omit<KadakInstance<S>, "define" | "push" | "transaction" | "close">) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
 // ------------------------------
@@ -64,7 +66,7 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
   let _rawDefinition: SchemaDefinition = {};
   const _url = config.url;
 
-  const data = <T = any>(input: Record<string, unknown>, options: { debug?: boolean } = {}): KadakQuery<T> => {
+  const data = <T = any>(input: Record<string, unknown>, options: { debug?: boolean; client?: pg.PoolClient } = {}): KadakQuery<T> => {
     validateInput(input, _currentSchema);
     const ast = buildAST(input);
     const plan = buildPlan(ast, _currentSchema);
@@ -73,7 +75,7 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
     const execution = async () => {
       let rows: any[] = [];
       try {
-        rows = await runQuery(sql, values, _url);
+        rows = await runQuery(sql, values, _url, options.client);
       } catch (e) {
         if (options.debug) console.error("❌ Kadak Execution Error:", (e as Error).message);
         rows = [];
@@ -87,7 +89,7 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
     queryObj.toSQL = () => ({ sql, values });
     queryObj.explain = async () => {
       const explainSql = `EXPLAIN ANALYZE ${sql}`;
-      return await runQuery(explainSql, values, _url);
+      return await runQuery(explainSql, values, _url, options.client);
     };
     queryObj.trace = () => ({ ast, plan, sql, values });
     return queryObj;
@@ -126,7 +128,7 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
       await pushSchema(_rawDefinition, _url);
     },
 
-    async insert<T extends keyof any>(table: T, data: any) {
+    async insert<T extends keyof any>(table: T, data: any, options: { client?: pg.PoolClient } = {}) {
       const tableName = String(table);
       const tableSchema = _currentSchema[tableName];
       if (!tableSchema) {
@@ -140,7 +142,7 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
       }
 
       const { sql, values } = buildInsertSQL(tableName, data);
-      const rows = await runQuery(sql, values, _url);
+      const rows = await runQuery(sql, values, _url, options.client);
       
       const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema)[0];
@@ -176,7 +178,7 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
       }
 
       const { sql, values } = buildUpdateSQL(tableName, options.where, options.data);
-      const rows = await runQuery(sql, values, _url);
+      const rows = await runQuery(sql, values, _url, options.client);
       
       const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema);
@@ -200,10 +202,35 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
       }
 
       const { sql, values } = buildDeleteSQL(tableName, options.where);
-      const rows = await runQuery(sql, values, _url);
+      const rows = await runQuery(sql, values, _url, options.client);
       
       const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema);
+    },
+
+    async transaction<T>(fn: any) {
+      const client = await getTransactionClient(_url);
+      try {
+        await client.query("BEGIN");
+        const tx = {
+          data: (input: any, opts: any = {}) => data(input, { ...opts, client }),
+          insert: (table: any, d: any, opts: any = {}) => instance.insert(table, d, { ...opts, client }),
+          update: (table: any, opts: any) => instance.update(table, { ...opts, client }),
+          delete: (table: any, opts: any) => instance.delete(table, { ...opts, client })
+        };
+        const result = await fn(tx);
+        await client.query("COMMIT");
+        return result;
+      } catch (e) {
+        try {
+          await client.query("ROLLBACK");
+        } catch (err) {
+          // Ignore rollback errors to avoid shadowing original error
+        }
+        throw e;
+      } finally {
+        client.release();
+      }
     },
 
     data,

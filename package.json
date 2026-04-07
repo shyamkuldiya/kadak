@@ -1,7 +1,7 @@
 {
   "name": "@shyk/kadak",
-  "version": "1.0.0",
-  "description": "",
+  "version": "0.0.1",
+  "description": "PostgreSQL Data Runtime",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,14 +20,21 @@
       "require": "./dist/exec/client.cjs"
     }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "test": "vitest run",
     "build": "tsup",
-    "dev": "tsx src/index.ts"
+    "test": "vitest run"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "postgres",
+    "runtime",
+    "orm",
+    "database"
+  ],
+  "author": "Shyam Kuldiya",
+  "license": "Apache-2.0",
   "type": "module",
   "dependencies": {
     "pg": "^8.20.0",
