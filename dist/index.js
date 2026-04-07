@@ -313,7 +313,12 @@ function validateInput(input, schema) {
     const suggestions = getSuggestions(rootTable, Object.keys(schema));
     throw new Error(`\u274C Kadak Error: Table '${rootTable}' not found. ${suggestions}`);
   }
-  validateNode(rootTable, input[rootTable], schema);
+  const rootNode = input[rootTable];
+  const hasPagination = Object.prototype.hasOwnProperty.call(rootNode, "take") || Object.prototype.hasOwnProperty.call(rootNode, "skip");
+  if (hasPagination && !Object.prototype.hasOwnProperty.call(rootNode, "orderBy")) {
+    throw new Error("Kadak Error: orderBy is required when using pagination");
+  }
+  validateNode(rootTable, rootNode, schema);
 }
 function validateNode(tableName, nodeInput, schema) {
   const tableSchema = schema[tableName] || {};

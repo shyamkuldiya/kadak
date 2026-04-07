@@ -9,7 +9,13 @@ export function validateInput(input: Record<string, unknown>, schema: Record<str
     throw new Error(`❌ Kadak Error: Table '${rootTable}' not found. ${suggestions}`);
   }
 
-  validateNode(rootTable, input[rootTable] as Record<string, unknown>, schema);
+  const rootNode = input[rootTable] as Record<string, unknown>;
+  const hasPagination = Object.prototype.hasOwnProperty.call(rootNode, "take") || Object.prototype.hasOwnProperty.call(rootNode, "skip");
+  if (hasPagination && !Object.prototype.hasOwnProperty.call(rootNode, "orderBy")) {
+    throw new Error("Kadak Error: orderBy is required when using pagination");
+  }
+
+  validateNode(rootTable, rootNode, schema);
 }
 
 function validateNode(tableName: string, nodeInput: Record<string, unknown>, schema: Record<string, Record<string, any>>) {
