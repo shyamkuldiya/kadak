@@ -1,4 +1,6 @@
-export function validateInput(input: Record<string, unknown>, schema: Record<string, Record<string, any>>) {
+type SchemaEntry = string | Record<string, unknown> | { table: string; as: string; to: string; source: string };
+
+export function validateInput(input: Record<string, unknown>, schema: Record<string, Record<string, SchemaEntry>>) {
   if (Object.keys(input).length === 0) {
     throw new Error("❌ Kadak Error: Input cannot be empty. Please provide a table to query.");
   }
@@ -15,10 +17,10 @@ export function validateInput(input: Record<string, unknown>, schema: Record<str
     throw new Error("Kadak Error: orderBy is required when using pagination");
   }
 
-  validateNode(rootTable, rootNode, schema);
+  validateNode(rootTable, rootNode, schema, true);
 }
 
-function validateNode(tableName: string, nodeInput: Record<string, unknown>, schema: Record<string, Record<string, any>>) {
+function validateNode(tableName: string, nodeInput: Record<string, unknown>, schema: Record<string, Record<string, SchemaEntry>>, isRoot: boolean = false) {
   const tableSchema = schema[tableName] || {};
   const validFields = Object.keys(tableSchema);
 
@@ -34,10 +36,16 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
     } else if (key === "limit" || key === "orderBy") {
        continue;
     } else if (key === "take") {
+      if (!isRoot) {
+        throw new Error("Kadak Error: nested pagination is not supported yet");
+      }
       if (typeof value !== "number" || value <= 0) {
         throw new Error("Kadak Error: 'take' must be > 0");
       }
     } else if (key === "skip") {
+      if (!isRoot) {
+        throw new Error("Kadak Error: nested pagination is not supported yet");
+      }
       if (typeof value !== "number" || value < 0) {
         throw new Error("Kadak Error: 'skip' must be >= 0");
       }
@@ -58,7 +66,9 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
 
       if (typeof value === "object" && value !== null) {
         if (typeof target === "object" && target !== null && "table" in target) {
-          validateNode((target as any).table, value as Record<string, unknown>, schema);
+          validateNode((target as { table: string }).table, value as Record<string, unknown>, schema, false);
+        } else if (typeof target === "string") {
+          validateNode(target.split(".")[0], value as Record<string, unknown>, schema, false);
         }
       }
     }

@@ -53,11 +53,14 @@ function processRelations(
   schema: Record<string, Record<string, any>>
 ) {
   for (const rel of relations) {
-    const target = schema[parentTable]?.[rel.name] as unknown as RelationDefinition | undefined;
+    const target = schema[parentTable]?.[rel.name] as unknown as RelationDefinition | string | undefined;
     if (!target) continue;
 
-    const targetTable = target.table;
-    const targetField = target.to;
+    const relation = typeof target === "string"
+      ? { table: target.split(".")[0], as: rel.name, to: target.split(".")[1] || "id", source: rel.name }
+      : target;
+    const targetTable = relation.table;
+    const targetField = relation.to;
     const isOneToMany = targetField !== "id";
 
     const prefix = `${rel.name}__`;

@@ -17,14 +17,14 @@ export type ColumnObject = {
   };
   unique?: boolean;
   nullable?: boolean;
-  default?: any;
+  default?: unknown;
   length?: number;
   onDelete?: "cascade" | "restrict" | "set null" | "no action";
   index?: boolean;
   autoUpdate?: boolean; // For updatedAt
 };
 
-export type ColumnDef = string | ColumnObject;
+export type ColumnDef = string | ColumnObject | ColumnBuilder;
 
 export interface TableConfig<N extends string = string, C extends Record<string, ColumnDef> = Record<string, ColumnDef>> {
   name: N;
@@ -38,14 +38,14 @@ export interface Table<N extends string = string, C extends Record<string, Colum
 export type SchemaDefinition = Record<string, Record<string, ColumnDef>>;
 
 // --- Fluent Column Builder ---
-export class ColumnBuilder {
-  private obj: ColumnObject = {};
+export class ColumnBuilder<T extends ColumnObject = ColumnObject> {
+  obj: ColumnObject = {};
 
   constructor(type?: ColumnObject["type"]) {
     if (type) this.obj.type = type;
   }
 
-  default(val: any) {
+  default(val: unknown) {
     this.obj.default = val;
     return this;
   }
@@ -101,35 +101,38 @@ export class ColumnBuilder {
   }
 
   // Internal helper to get the raw object
-  build(): ColumnObject {
-    return this.obj;
+  build(): T {
+    return this.obj as T;
   }
 }
 
 export const types = {
-  string: () => new ColumnBuilder("string"),
-  varchar: (len?: number) => new ColumnBuilder("varchar").length(len || 255),
-  int: () => new ColumnBuilder("int"),
-  text: () => new ColumnBuilder("text"),
-  jsonb: () => new ColumnBuilder("jsonb"),
-  timestamp: () => new ColumnBuilder("timestamp"),
-  array: (innerType: ColumnBuilder) => {
+  string: () => new ColumnBuilder<{ type: "string" }>("string"),
+  varchar: (len?: number) => new ColumnBuilder<{ type: "varchar"; length?: number }>("varchar").length(len || 255),
+  int: () => new ColumnBuilder<{ type: "int" }>("int"),
+  text: () => new ColumnBuilder<{ type: "text" }>("text"),
+  jsonb: () => new ColumnBuilder<{ type: "jsonb" }>("jsonb"),
+  timestamp: () => new ColumnBuilder<{ type: "timestamp" }>("timestamp"),
+  array: <T extends "string" | "int">(innerType: ColumnBuilder<{ type: T }>) => {
     const built = typeof innerType?.build === "function" ? innerType.build() : innerType;
     const inner = built as ColumnObject;
     if (!inner || (inner.type !== "string" && inner.type !== "int")) {
       throw new Error("Kadak Error: array() only supports string or int");
     }
-    const b = new ColumnBuilder("array");
-    (b as any).obj.array = { type: inner.type as "string" | "int" };
+    const b = new ColumnBuilder<{ type: "array"; array: { type: T } }>("array");
+    b.obj.array = { type: inner.type as T };
     return b;
   },
-  ref: (table: string, opts: { as: string; to?: string }) => {
+  ref: <const TableName extends string, const RelationName extends string, const To extends string = "id">(
+    table: TableName,
+    opts: { as: RelationName; to?: To }
+  ) => {
     if (!opts?.as) {
       throw new Error("Kadak Error: 'as' is required in ref()");
     }
-    const b = new ColumnBuilder();
-    (b as any).obj.ref = { table, as: opts.as, to: opts.to || "id" };
-    (b as any).obj.type = "int"; // Refs are integers
+    const b = new ColumnBuilder<{ type: "int"; ref: { table: TableName; as: RelationName; to: To } }>();
+    b.obj.ref = { table, as: opts.as, to: (opts.to || "id") as To };
+    b.obj.type = "int"; // Refs are integers
     return b;
   },
   timestamps: () => ({

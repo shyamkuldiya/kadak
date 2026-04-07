@@ -25,7 +25,8 @@
   ],
   "scripts": {
     "build": "tsup",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.types.json"
   },
   "keywords": [
     "postgres",

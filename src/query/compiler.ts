@@ -6,7 +6,9 @@ export type Compiled = {
   values: unknown[];
 };
 
-export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Record<string, any>>): Compiled {
+type SchemaEntry = string | { table: string; as: string; to: string; source: string } | Record<string, unknown>;
+
+export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Record<string, SchemaEntry>>): Compiled {
   const values: unknown[] = [];
   const selections: string[] = [];
 
@@ -36,9 +38,10 @@ export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Rec
     for (const rel of relations) {
       const mapping = schema[tableName]?.[rel.name];
       if (!mapping || typeof mapping !== "object" || !("table" in mapping)) continue;
-      const alias = mapping.as !== mapping.table ? mapping.as : undefined;
-      addTableColumns(mapping.table, alias, rel.select);
-      walkRelations(mapping.table, rel.relations);
+      const relation = mapping as { table: string; as: string };
+      const alias = relation.as !== relation.table ? relation.as : undefined;
+      addTableColumns(relation.table, alias, rel.select);
+      walkRelations(relation.table, rel.relations);
     }
   };
 

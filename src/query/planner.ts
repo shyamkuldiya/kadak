@@ -7,6 +7,8 @@ type RelationDefinition = {
   source: string;
 };
 
+type SchemaEntry = string | RelationDefinition | Record<string, unknown>;
+
 export type Plan = {
   from: string;
   joins: Array<{
@@ -18,7 +20,7 @@ export type Plan = {
   orderBy?: OrderBy;
 };
 
-export function buildPlan(ast: QueryAST, schema: Record<string, Record<string, any>>): Plan {
+export function buildPlan(ast: QueryAST, schema: Record<string, Record<string, SchemaEntry>>): Plan {
   const plan: Plan = {
     from: ast.root,
     joins: [],
@@ -34,17 +36,19 @@ function traverse(
   parentTableOrAlias: string, 
   relations: RelationAST[], 
   plan: Plan, 
-  schema: Record<string, Record<string, any>>
+  schema: Record<string, Record<string, SchemaEntry>>
 ) {
   for (const rel of relations) {
     const parentTable = findTable(parentTableOrAlias, plan);
     const target = schema[parentTable]?.[rel.name];
     
-    if (!target || typeof target !== "object" || !("table" in target)) {
+    if (!target) {
       throw new Error(`Invalid relation: ${rel.name} not found on ${parentTable}`);
     }
 
-    const relation = target as RelationDefinition;
+    const relation = typeof target === "string"
+      ? { table: target.split(".")[0], as: rel.name, to: target.split(".")[1] || "id", source: "id" }
+      : (target as RelationDefinition);
     const targetTable = relation.table;
     const targetField = relation.to || "id";
     

@@ -2,7 +2,7 @@
 function buildAST(queryInput) {
   const rootKey = Object.keys(queryInput)[0];
   const rootValue = queryInput[rootKey];
-  const { where, relations, orderBy, select, take, skip } = parseNode(rootValue);
+  const { where, relations, orderBy, select, take, skip } = parseNode(rootValue, true);
   return {
     root: rootKey,
     select,
@@ -13,7 +13,7 @@ function buildAST(queryInput) {
     relations
   };
 }
-function parseNode(input) {
+function parseNode(input, isRoot) {
   const where = [];
   const relations = [];
   let orderBy;
@@ -37,12 +37,18 @@ function parseNode(input) {
         if (enabled) select[field] = true;
       }
     } else if (key === "take") {
+      if (!isRoot) {
+        throw new Error("Kadak Error: nested pagination is not supported yet");
+      }
       take = Number(value);
     } else if (key === "skip") {
+      if (!isRoot) {
+        throw new Error("Kadak Error: nested pagination is not supported yet");
+      }
       skip = Number(value);
     } else if (value === true || typeof value === "object" && value !== null) {
       const relationInput = value === true ? {} : value;
-      const { relations: nestedRelations, select: nestedSelect } = parseNode(relationInput);
+      const { relations: nestedRelations, select: nestedSelect } = parseNode(relationInput, false);
       relations.push({
         name: key,
         select: nestedSelect,
@@ -68,10 +74,10 @@ function traverse(parentTableOrAlias, relations, plan, schema) {
   for (const rel of relations) {
     const parentTable = findTable(parentTableOrAlias, plan);
     const target = schema[parentTable]?.[rel.name];
-    if (!target || typeof target !== "object" || !("table" in target)) {
+    if (!target) {
       throw new Error(`Invalid relation: ${rel.name} not found on ${parentTable}`);
     }
-    const relation = target;
+    const relation = typeof target === "string" ? { table: target.split(".")[0], as: rel.name, to: target.split(".")[1] || "id", source: "id" } : target;
     const targetTable = relation.table;
     const targetField = relation.to || "id";
     const alias = relation.as !== targetTable ? relation.as : void 0;
@@ -119,9 +125,10 @@ function compileSQL(plan, ast, schema) {
     for (const rel of relations) {
       const mapping = schema[tableName]?.[rel.name];
       if (!mapping || typeof mapping !== "object" || !("table" in mapping)) continue;
-      const alias = mapping.as !== mapping.table ? mapping.as : void 0;
-      addTableColumns(mapping.table, alias, rel.select);
-      walkRelations(mapping.table, rel.relations);
+      const relation = mapping;
+      const alias = relation.as !== relation.table ? relation.as : void 0;
+      addTableColumns(relation.table, alias, rel.select);
+      walkRelations(relation.table, rel.relations);
     }
   };
   addTableColumns(plan.from, void 0, ast.select);
@@ -218,8 +225,9 @@ function processRelations(parentTable, parentObj, row, relations, schema) {
   for (const rel of relations) {
     const target = schema[parentTable]?.[rel.name];
     if (!target) continue;
-    const targetTable = target.table;
-    const targetField = target.to;
+    const relation = typeof target === "string" ? { table: target.split(".")[0], as: rel.name, to: target.split(".")[1] || "id", source: rel.name } : target;
+    const targetTable = relation.table;
+    const targetField = relation.to;
     const isOneToMany = targetField !== "id";
     const prefix = `${rel.name}__`;
     const relId = row[`${prefix}id`];
@@ -318,9 +326,9 @@ function validateInput(input, schema) {
   if (hasPagination && !Object.prototype.hasOwnProperty.call(rootNode, "orderBy")) {
     throw new Error("Kadak Error: orderBy is required when using pagination");
   }
-  validateNode(rootTable, rootNode, schema);
+  validateNode(rootTable, rootNode, schema, true);
 }
-function validateNode(tableName, nodeInput, schema) {
+function validateNode(tableName, nodeInput, schema, isRoot = false) {
   const tableSchema = schema[tableName] || {};
   const validFields = Object.keys(tableSchema);
   for (const [key, value] of Object.entries(nodeInput)) {
@@ -335,10 +343,16 @@ function validateNode(tableName, nodeInput, schema) {
     } else if (key === "limit" || key === "orderBy") {
       continue;
     } else if (key === "take") {
+      if (!isRoot) {
+        throw new Error("Kadak Error: nested pagination is not supported yet");
+      }
       if (typeof value !== "number" || value <= 0) {
         throw new Error("Kadak Error: 'take' must be > 0");
       }
     } else if (key === "skip") {
+      if (!isRoot) {
+        throw new Error("Kadak Error: nested pagination is not supported yet");
+      }
       if (typeof value !== "number" || value < 0) {
         throw new Error("Kadak Error: 'skip' must be >= 0");
       }
@@ -357,7 +371,9 @@ function validateNode(tableName, nodeInput, schema) {
       }
       if (typeof value === "object" && value !== null) {
         if (typeof target === "object" && target !== null && "table" in target) {
-          validateNode(target.table, value, schema);
+          validateNode(target.table, value, schema, false);
+        } else if (typeof target === "string") {
+          validateNode(target.split(".")[0], value, schema, false);
         }
       }
     }
@@ -705,7 +721,7 @@ var kadak = ((config) => {
         throw new Error(`\u274C Kadak Error: Update mutation requires a 'where' clause.`);
       }
       for (const [col, def] of Object.entries(tableSchema)) {
-        if (typeof def === "object" && def !== null && def.autoUpdate) {
+        if (typeof def === "object" && def !== null && "autoUpdate" in def && def.autoUpdate) {
           options.data[col] = "NOW()";
         }
       }
