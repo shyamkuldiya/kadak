@@ -69,5 +69,13 @@ export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Rec
     sql += `ORDER BY ${plan.from}."${plan.orderBy.field}" ${plan.orderBy.direction.toUpperCase()}\n`;
   }
 
+  if (ast.take !== undefined) {
+    sql += `LIMIT ${ast.take}\n`;
+  }
+
+  if (ast.skip !== undefined) {
+    sql += `OFFSET ${ast.skip}\n`;
+  }
+
   return { text: sql.trim(), values };
 }

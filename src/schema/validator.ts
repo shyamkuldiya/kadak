@@ -27,6 +27,14 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
       }
     } else if (key === "limit" || key === "orderBy") {
        continue;
+    } else if (key === "take") {
+      if (typeof value !== "number" || value <= 0) {
+        throw new Error("Kadak Error: 'take' must be > 0");
+      }
+    } else if (key === "skip") {
+      if (typeof value !== "number" || value < 0) {
+        throw new Error("Kadak Error: 'skip' must be >= 0");
+      }
     } else if (key === "select") {
       const selectObj = value as Record<string, unknown>;
       for (const field of Object.keys(selectObj)) {

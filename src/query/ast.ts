@@ -14,6 +14,8 @@ export type OrderBy = {
 export type QueryAST = {
   root: string;
   select?: Record<string, true>;
+  take?: number;
+  skip?: number;
   where?: Predicate[];
   orderBy?: OrderBy;
   relations: RelationAST[];

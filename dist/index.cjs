@@ -50,10 +50,12 @@ module.exports = __toCommonJS(index_exports);
 function buildAST(queryInput) {
   const rootKey = Object.keys(queryInput)[0];
   const rootValue = queryInput[rootKey];
-  const { where, relations, orderBy, select } = parseNode(rootValue);
+  const { where, relations, orderBy, select, take, skip } = parseNode(rootValue);
   return {
     root: rootKey,
     select,
+    take,
+    skip,
     where: where.length > 0 ? where : void 0,
     orderBy,
     relations
@@ -64,6 +66,8 @@ function parseNode(input) {
   const relations = [];
   let orderBy;
   let select;
+  let take;
+  let skip;
   for (const [key, value] of Object.entries(input)) {
     if (key === "where") {
       const whereObj = value;
@@ -80,6 +84,10 @@ function parseNode(input) {
       for (const [field, enabled] of Object.entries(value)) {
         if (enabled) select[field] = true;
       }
+    } else if (key === "take") {
+      take = Number(value);
+    } else if (key === "skip") {
+      skip = Number(value);
     } else if (value === true || typeof value === "object" && value !== null) {
       const relationInput = value === true ? {} : value;
       const { relations: nestedRelations, select: nestedSelect } = parseNode(relationInput);
@@ -90,7 +98,7 @@ function parseNode(input) {
       });
     }
   }
-  return { where, relations, orderBy, select };
+  return { where, relations, orderBy, select, take, skip };
 }
 
 // src/query/planner.ts
@@ -187,6 +195,14 @@ function compileSQL(plan, ast, schema) {
   }
   if (plan.orderBy) {
     sql += `ORDER BY ${plan.from}."${plan.orderBy.field}" ${plan.orderBy.direction.toUpperCase()}
+`;
+  }
+  if (ast.take !== void 0) {
+    sql += `LIMIT ${ast.take}
+`;
+  }
+  if (ast.skip !== void 0) {
+    sql += `OFFSET ${ast.skip}
 `;
   }
   return { text: sql.trim(), values };
@@ -361,6 +377,14 @@ function validateNode(tableName, nodeInput, schema) {
       }
     } else if (key === "limit" || key === "orderBy") {
       continue;
+    } else if (key === "take") {
+      if (typeof value !== "number" || value <= 0) {
+        throw new Error("Kadak Error: 'take' must be > 0");
+      }
+    } else if (key === "skip") {
+      if (typeof value !== "number" || value < 0) {
+        throw new Error("Kadak Error: 'skip' must be >= 0");
+      }
     } else if (key === "select") {
       const selectObj = value;
       for (const field of Object.keys(selectObj)) {
