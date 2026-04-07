@@ -13,20 +13,20 @@ async function testTransactions() {
     }
   });
 
-  const k = db.define({ tx_users });
+  const dbClient = db.define({ tx_users });
 
   try {
     console.log("--- Kadak Transaction Test ---");
     
     console.log("1. Pushing Schema...");
-    await k.push();
+    await dbClient.push();
 
     console.log("2. Cleaning table...");
     await runQuery("DELETE FROM tx_users", [], DB_URL);
 
     // --- TEST 1: SUCCESSFUL TRANSACTION ---
     console.log("3. Testing Successful Transaction...");
-    await k.transaction(async (tx) => {
+    await dbClient.transaction(async (tx) => {
       const user = await tx.insert("tx_users", { name: "Alice", balance: 100 });
       await tx.update("tx_users", {
         where: { id: user.id },
@@ -34,7 +34,7 @@ async function testTransactions() {
       });
     });
 
-    const alice = await k.data({ tx_users: { where: { name: "Alice" } } });
+    const alice = await dbClient.data({ tx_users: { where: { name: "Alice" } } });
     if (alice[0].balance === 150) {
       console.log("✅ Success: Transaction committed (Alice balance is 150).");
     } else {
@@ -44,7 +44,7 @@ async function testTransactions() {
     // --- TEST 2: ROLLBACK ON ERROR ---
     console.log("4. Testing Rollback on Error...");
     try {
-      await k.transaction(async (tx) => {
+      await dbClient.transaction(async (tx) => {
         await tx.insert("tx_users", { name: "Bob", balance: 200 });
         throw new Error("Simulated Error");
       });
@@ -56,7 +56,7 @@ async function testTransactions() {
       }
     }
 
-    const bob = await k.data({ tx_users: { where: { name: "Bob" } } });
+    const bob = await dbClient.data({ tx_users: { where: { name: "Bob" } } });
     if (bob.length === 0) {
       console.log("✅ Success: Transaction rolled back (Bob not found).");
     } else {
@@ -73,4 +73,4 @@ async function testTransactions() {
   }
 }
 
-testTransactions();
+await testTransactions();

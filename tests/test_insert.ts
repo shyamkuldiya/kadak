@@ -15,13 +15,13 @@ async function runInsertTests() {
     }
   });
 
-  const k = db.define({ users });
+  const dbClient = db.define({ users });
 
   // 1. Valid Insert
   console.log("\n1. Valid Insert Test:");
   try {
     // In mock mode, this will fail on execution, but let's check validation
-    const res = await k.insert("users", {
+    const res = await dbClient.insert("users", {
       name: "Alice",
       email: "alice@example.com"
     });
@@ -34,7 +34,7 @@ async function runInsertTests() {
   console.log("\n2. Invalid Table Test:");
   try {
     // @ts-expect-error
-    await k.insert("unknown_table", { name: "test" });
+    await dbClient.insert("unknown_table", { name: "test" });
   } catch (e: any) {
     console.log("Caught Expected Error:", e.message);
   }
@@ -43,7 +43,7 @@ async function runInsertTests() {
   console.log("\n3. Invalid Field Test:");
   try {
     // @ts-expect-error
-    await k.insert("users", { unknown_field: "test" });
+    await dbClient.insert("users", { unknown_field: "test" });
   } catch (e: any) {
     console.log("Caught Expected Error:", e.message);
   }
@@ -51,7 +51,7 @@ async function runInsertTests() {
   // 4. Partial Insert (Should work)
   console.log("\n4. Partial Insert Test:");
   try {
-    await k.insert("users", { name: "Bob" });
+    await dbClient.insert("users", { name: "Bob" });
     console.log("✅ Partial insert passed validation.");
   } catch (e: any) {
     console.log("Caught (Expected if mock):", e.message);
@@ -60,4 +60,4 @@ async function runInsertTests() {
   await db.close().catch(() => {});
 }
 
-runInsertTests();
+await runInsertTests();

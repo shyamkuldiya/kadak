@@ -64,4 +64,4 @@ async function runTests() {
   }
 }
 
-runTests();
+await runTests();

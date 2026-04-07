@@ -12,12 +12,12 @@ async function runDXTests() {
     columns: { title: "string" }
   });
 
-  const k = db.define({ tasks });
+  const dbClient = db.define({ tasks });
 
   // 2. Test schema reuse
   console.log("\n1. Schema reuse:");
   try {
-    const q = k.data({
+    const q = dbClient.data({
       tasks: {
         where: { id: 1 }
       }
@@ -40,7 +40,7 @@ async function runDXTests() {
     originalWarn(...args);
   };
 
-  await k.push().catch(() => {});
+  await dbClient.push().catch(() => {});
   
   if (warnCalled) {
     console.log("✅ Success: Production warning was triggered.");
@@ -54,4 +54,4 @@ async function runDXTests() {
   await db.close().catch(() => {});
 }
 
-runDXTests();
+await runDXTests();

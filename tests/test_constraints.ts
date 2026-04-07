@@ -2,7 +2,7 @@ import { kadak } from "../src/index.js";
 
 async function runConstraintTests() {
   const DB_URL = process.env.DATABASE_URL || "postgres://localhost:5432/mock";
-  const { t } = kadak;
+  const { types } = kadak;
 
   console.log("--- Kadak Constraints & Indexing Tests ---");
 
@@ -11,26 +11,26 @@ async function runConstraintTests() {
   const members = kadak.table({
     name: "members",
     columns: {
-      username: t.string().unique().notNull(),
-      email: t.string().unique(),
-      score: t.int().index().default(0),
-      bio: t.text().nullable()
+      username: types.string().unique().notNull(),
+      email: types.string().unique(),
+      score: types.int().index().default(0),
+      bio: types.text().nullable()
     }
   });
 
-  const k = db.define({ members });
+  const dbClient = db.define({ members });
 
   try {
     // 1. Schema Push
     console.log("\n1. Pushing Schema (including unique, notNull, and indexes)...");
-    await k.push();
+    await dbClient.push();
     console.log("✅ Schema and Indexes pushed.");
 
     // 2. NotNull Enforcement Test
     console.log("\n2. NotNull Enforcement Test:");
     try {
       // Should fail because username is notNull
-      await k.insert("members", { email: "test@test.com" } as any);
+      await dbClient.insert("members", { email: "test@test.com" } as any);
       console.log("❌ Failure: Inserted row without NOT NULL field.");
     } catch (e: any) {
       console.log("✅ Success: Caught NOT NULL violation:", e.message);
@@ -38,10 +38,10 @@ async function runConstraintTests() {
 
     // 3. Unique Constraint Test
     console.log("\n3. Unique Constraint Test:");
-    await k.insert("members", { username: "alice", email: "alice@test.com" });
+    await dbClient.insert("members", { username: "alice", email: "alice@test.com" });
     try {
       // Should fail because email is unique
-      await k.insert("members", { username: "alice2", email: "alice@test.com" });
+      await dbClient.insert("members", { username: "alice2", email: "alice@test.com" });
       console.log("❌ Failure: Inserted duplicate unique field.");
     } catch (e: any) {
       console.log("✅ Success: Caught UNIQUE violation:", e.message);
@@ -71,4 +71,4 @@ async function runConstraintTests() {
   }
 }
 
-runConstraintTests();
+await runConstraintTests();

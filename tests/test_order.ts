@@ -14,38 +14,38 @@ async function runOrderTest() {
     columns: { id: "tasks.id", title: "tasks.title" }
   });
 
-  const k = db.define({ tasks });
+  const dbClient = db.define({ tasks });
 
   try {
     // 1. Order by ID ASC
     console.log("\n1. Order by ID ASC:");
-    const q1 = await k.data({
+    const q1 = await dbClient.data({
       tasks: {
         orderBy: { id: "asc" }
       }
     }, { debug: true });
     console.log("SQL:", q1.sql);
     if (q1.data && q1.data.length > 0) {
-      console.log("First 3 IDs:", q1.data.slice(0, 3).map((t: any) => t.id));
+      console.log("First 3 IDs:", q1.data.slice(0, 3).map((row: any) => row.id));
     }
 
     // 2. Order by ID DESC
     console.log("\n2. Order by ID DESC:");
-    const q2 = await k.data({
+    const q2 = await dbClient.data({
       tasks: {
         orderBy: { id: "desc" }
       }
     }, { debug: true });
     console.log("SQL:", q2.sql);
     if (q2.data && q2.data.length > 0) {
-      console.log("First 3 IDs:", q2.data.slice(0, 3).map((t: any) => t.id));
+      console.log("First 3 IDs:", q2.data.slice(0, 3).map((row: any) => row.id));
     }
 
     // Verification (only if real data returned)
     if (q1.data && q1.data.length > 0 && q2.data && q2.data.length > 0) {
-      const ascIds = q1.data.map((t: any) => t.id);
+      const ascIds = q1.data.map((row: any) => row.id);
       const descIds = [...ascIds].reverse();
-      const actualDescIds = q2.data.map((t: any) => t.id);
+      const actualDescIds = q2.data.map((row: any) => row.id);
 
       if (JSON.stringify(descIds) === JSON.stringify(actualDescIds)) {
         console.log("\n✅ Success: Ordering is deterministic and stable.");
@@ -63,4 +63,4 @@ async function runOrderTest() {
   }
 }
 
-runOrderTest();
+await runOrderTest();

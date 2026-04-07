@@ -15,12 +15,12 @@ async function runUpdateTests() {
     }
   });
 
-  const k = db.define({ users });
+  const dbClient = db.define({ users });
 
   // 1. Valid Update
   console.log("\n1. Valid Update Test:");
   try {
-    const res = await k.update("users", {
+    const res = await dbClient.update("users", {
       where: { id: 1 },
       data: { name: "Bob" }
     });
@@ -33,7 +33,7 @@ async function runUpdateTests() {
   console.log("\n2. Invalid Table Test:");
   try {
     // @ts-expect-error
-    await k.update("unknown_table", { where: { id: 1 }, data: { name: "test" } });
+    await dbClient.update("unknown_table", { where: { id: 1 }, data: { name: "test" } });
   } catch (e: any) {
     console.log("Caught Expected Error:", e.message);
   }
@@ -42,7 +42,7 @@ async function runUpdateTests() {
   console.log("\n3. Invalid Field in Data Test:");
   try {
     // @ts-expect-error
-    await k.update("users", { where: { id: 1 }, data: { unknown_field: "test" } });
+    await dbClient.update("users", { where: { id: 1 }, data: { unknown_field: "test" } });
   } catch (e: any) {
     console.log("Caught Expected Error:", e.message);
   }
@@ -50,7 +50,7 @@ async function runUpdateTests() {
   // 4. Invalid Field in Where
   console.log("\n4. Invalid Field in Where Test:");
   try {
-    await k.update("users", { where: { unknown_field: 1 }, data: { name: "test" } });
+    await dbClient.update("users", { where: { unknown_field: 1 }, data: { name: "test" } });
   } catch (e: any) {
     console.log("Caught Expected Error:", e.message);
   }
@@ -59,7 +59,7 @@ async function runUpdateTests() {
   console.log("\n5. Missing Where Test:");
   try {
     // @ts-expect-error
-    await k.update("users", { data: { name: "test" } });
+    await dbClient.update("users", { data: { name: "test" } });
   } catch (e: any) {
     console.log("Caught Expected Error:", e.message);
   }
@@ -67,4 +67,4 @@ async function runUpdateTests() {
   await db.close().catch(() => {});
 }
 
-runUpdateTests();
+await runUpdateTests();

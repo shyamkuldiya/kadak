@@ -80,7 +80,7 @@ export class ColumnBuilder {
   }
 }
 
-export const t = {
+export const types = {
   string: () => new ColumnBuilder("string"),
   varchar: (len?: number) => new ColumnBuilder("varchar").length(len || 255),
   int: () => new ColumnBuilder("int"),
@@ -98,6 +98,7 @@ export const t = {
     updatedAt: { type: "timestamp", default: "NOW()", autoUpdate: true } as ColumnObject
   })
 };
+export const t = types;
 // -----------------------------
 
 function generateColumnSQL(colName: string, rawDef: any, tableName: string, indexStatements: string[]): { columnSQL: string | null, fkSQL?: string } {

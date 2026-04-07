@@ -31,7 +31,7 @@ async function runTests() {
     }
   });
 
-  const k = db.define({ tasks, comments, users });
+  const dbClient = db.define({ tasks, comments, users });
 
   const queryInput = {
     tasks: {
@@ -42,7 +42,7 @@ async function runTests() {
     }
   };
 
-  const q = k.data(queryInput);
+  const q = dbClient.data(queryInput);
 
   // 1. .toSQL()
   console.log("\n1. .toSQL() Test:");
@@ -79,4 +79,4 @@ async function runTests() {
   await db.close().catch(() => {});
 }
 
-runTests();
+await runTests();

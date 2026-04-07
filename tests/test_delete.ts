@@ -15,12 +15,12 @@ async function runDeleteTests() {
     }
   });
 
-  const k = db.define({ users });
+  const dbClient = db.define({ users });
 
   // 1. Valid Delete
   console.log("\n1. Valid Delete Test:");
   try {
-    const res = await k.delete("users", {
+    const res = await dbClient.delete("users", {
       where: { id: 1 }
     });
     console.log("Deleted Rows:", res);
@@ -32,7 +32,7 @@ async function runDeleteTests() {
   console.log("\n2. Invalid Table Test:");
   try {
     // @ts-expect-error
-    await k.delete("unknown_table", { where: { id: 1 } });
+    await dbClient.delete("unknown_table", { where: { id: 1 } });
   } catch (e: any) {
     console.log("Caught Expected Error:", e.message);
   }
@@ -41,7 +41,7 @@ async function runDeleteTests() {
   console.log("\n3. Invalid Field in Where Test:");
   try {
     // @ts-expect-error
-    await k.delete("users", { where: { unknown_field: 1 } });
+    await dbClient.delete("users", { where: { unknown_field: 1 } });
   } catch (e: any) {
     console.log("Caught Expected Error:", e.message);
   }
@@ -50,7 +50,7 @@ async function runDeleteTests() {
   console.log("\n4. Missing Where Test:");
   try {
     // @ts-expect-error
-    await k.delete("users", { where: {} });
+    await dbClient.delete("users", { where: {} });
   } catch (e: any) {
     console.log("Caught Expected Error:", e.message);
   }
@@ -58,4 +58,4 @@ async function runDeleteTests() {
   await db.close().catch(() => {});
 }
 
-runDeleteTests();
+await runDeleteTests();

@@ -21,4 +21,4 @@ async function runCLITest() {
   }
 }
 
-runCLITest();
+await runCLITest();

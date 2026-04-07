@@ -36,11 +36,11 @@ async function runStressTest() {
     }
   });
 
-  const k = db.define({ users, tasks, comments });
+  const dbClient = db.define({ users, tasks, comments });
 
   try {
     console.log("1. Setting up schema...");
-    await k.push();
+    await dbClient.push();
 
     const { runQuery } = await import("../src/exec/client.js");
     await runQuery("DELETE FROM comments", [], DB_URL);
@@ -73,7 +73,7 @@ async function runStressTest() {
     console.log("✅ Data seeded.");
 
     console.log("\n3. Running Deep Query: tasks -> comments -> author");
-    const result = await k.data({
+    const result = await dbClient.data({
       tasks: {
         comments: {
           author: true
@@ -85,9 +85,9 @@ async function runStressTest() {
     
     // verification...
     const resultData = result.data;
-    const taskWithMany = resultData.find((t: any) => t.comments && t.comments.length === 5);
-    const taskWithNone = resultData.find((t: any) => t.id === taskIds[10]); 
-    const taskWithNullAuthor = resultData.find((t: any) => t.id === taskIds[14]);
+    const taskWithMany = resultData.find((row: any) => row.comments && row.comments.length === 5);
+    const taskWithNone = resultData.find((row: any) => row.id === taskIds[10]); 
+    const taskWithNullAuthor = resultData.find((row: any) => row.id === taskIds[14]);
 
     console.log("\n--- Edge Case Verification ---");
     console.log("Task with 5 comments found:", !!taskWithMany ? "✅ Yes" : "❌ No");
@@ -98,7 +98,7 @@ async function runStressTest() {
 
     // 4. Empty Result Set Edge Case
     console.log("\n4. Empty Result Set Test:");
-    const emptyResult = await k.data({
+    const emptyResult = await dbClient.data({
       tasks: {
         where: { id: 999999 }
       }
@@ -115,4 +115,4 @@ async function runStressTest() {
   }
 }
 
-runStressTest();
+await runStressTest();

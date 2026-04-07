@@ -2,7 +2,7 @@ import { kadak } from "../src/index.js";
 
 async function runTimestampTests() {
   const DB_URL = process.env.DATABASE_URL || "postgres://localhost:5432/mock";
-  const { t } = kadak;
+  const { types } = kadak;
 
   console.log("--- Kadak Defaults & Timestamps Tests ---");
 
@@ -11,23 +11,23 @@ async function runTimestampTests() {
   const users = kadak.table({
     name: "users_meta",
     columns: {
-      name: t.string().default("guest"),
-      age: t.int().default(0),
-      ...t.timestamps()
+      name: types.string().default("guest"),
+      age: types.int().default(0),
+      ...types.timestamps()
     }
   });
 
-  const k = db.define({ users });
+  const dbClient = db.define({ users });
 
   try {
     // 1. Schema Push
     console.log("\n1. Pushing Schema...");
-    await k.push();
+    await dbClient.push();
     console.log("✅ Schema pushed.");
 
     // 2. Default Values Test
     console.log("\n2. Default Values Test:");
-    const guest = await k.insert("users_meta", {});
+    const guest = await dbClient.insert("users_meta", {});
     console.log("Guest User (should have defaults):", guest);
     
     if (guest.name === "guest" && guest.age === 0 && guest.createdAt) {
@@ -38,7 +38,7 @@ async function runTimestampTests() {
 
     // 3. Override Default Test
     console.log("\n3. Override Default Test:");
-    const admin = await k.insert("users_meta", { name: "admin", age: 99 });
+    const admin = await dbClient.insert("users_meta", { name: "admin", age: 99 });
     console.log("Admin User (should override defaults):", admin);
     
     if (admin.name === "admin" && admin.age === 99) {
@@ -54,7 +54,7 @@ async function runTimestampTests() {
     // Wait a moment to ensure timestamp changes
     await new Promise(r => setTimeout(r, 1000));
     
-    const [updatedGuest] = await k.update("users_meta", {
+    const [updatedGuest] = await dbClient.update("users_meta", {
       where: { id: guest.id },
       data: { age: 1 }
     });
@@ -75,4 +75,4 @@ async function runTimestampTests() {
   }
 }
 
-runTimestampTests();
+await runTimestampTests();

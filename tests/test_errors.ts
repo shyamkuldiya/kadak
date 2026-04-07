@@ -31,13 +31,13 @@ async function runTests() {
     }
   });
 
-  const k = db.define({ tasks, comments, users });
+  const dbClient = db.define({ tasks, comments, users });
 
   // 1. Invalid relation
   console.log("\n1. Invalid Relation Test:");
   try {
     console.log("Query: { tasks: { invalid_rel: true } }");
-    await k.data({ tasks: { invalid_rel: true } } as any);
+    await dbClient.data({ tasks: { invalid_rel: true } } as any);
   } catch (e: any) {
     console.log("Caught expected error:", e.message);
   }
@@ -46,7 +46,7 @@ async function runTests() {
   console.log("\n2. Invalid Where Field Test:");
   try {
     console.log("Query: { tasks: { where: { non_existent: 1 } } }");
-    await k.data({ tasks: { where: { non_existent: 1 } } } as any);
+    await dbClient.data({ tasks: { where: { non_existent: 1 } } } as any);
   } catch (e: any) {
     console.log("Caught expected error:", e.message);
   }
@@ -55,7 +55,7 @@ async function runTests() {
   console.log("\n3. Empty Query Test:");
   try {
     console.log("Query: {}");
-    await k.data({} as any);
+    await dbClient.data({} as any);
   } catch (e: any) {
     console.log("Caught expected error:", e.message);
   }
@@ -64,7 +64,7 @@ async function runTests() {
   console.log("\n4. Missing Schema Mapping Test:");
   try {
     console.log("Query: { unknown_table: {} }");
-    await k.data({ unknown_table: {} } as any);
+    await dbClient.data({ unknown_table: {} } as any);
   } catch (e: any) {
     console.log("Caught expected error:", e.message);
   }
@@ -73,4 +73,4 @@ async function runTests() {
   await db.close().catch(() => {});
 }
 
-runTests();
+await runTests();

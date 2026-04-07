@@ -19,7 +19,7 @@ npm install @shyk/kadak
 
 ```typescript
 import { kadak } from "@shyk/kadak"
-const { t } = kadak
+const { types } = kadak
 
 const db = kadak({ url: process.env.DATABASE_URL })
 
@@ -27,16 +27,16 @@ const db = kadak({ url: process.env.DATABASE_URL })
 const users = kadak.table({
   name: "users",
   columns: {
-    name: t.string().notNull(),
-    email: t.string().unique().notNull(),
-    ...t.timestamps()
+    name: types.string().notNull(),
+    email: types.string().unique().notNull(),
+    ...types.timestamps()
   }
 })
 
-const k = db.define({ users })
+const dbClient = db.define({ users })
 
 // 2. Query with nested relations
-const data = await k.data({
+const data = await dbClient.data({
   users: {
     where: { id: 1 },
     posts: {
@@ -56,11 +56,11 @@ Kadak includes a CLI for syncing your schema with the database.
 
 ```typescript
 import { kadak } from "@shyk/kadak"
-const { t } = kadak
+const { types } = kadak
 
 const users = kadak.table({
   name: "users",
-  columns: { name: t.string() }
+  columns: { name: types.string() }
 })
 
 export default {
@@ -81,16 +81,16 @@ npx kadak push
 
 ```typescript
 // Insert
-const user = await k.insert("users", { name: "Alice" })
+const user = await dbClient.insert("users", { name: "Alice" })
 
 // Update
-await k.update("users", {
+await dbClient.update("users", {
   where: { id: 1 },
   data: { name: "Bob" }
 })
 
 // Delete
-await k.delete("users", { where: { id: 1 } })
+await dbClient.delete("users", { where: { id: 1 } })
 ```
 
 ---
@@ -98,7 +98,7 @@ await k.delete("users", { where: { id: 1 } })
 ### Debugging
 
 ```typescript
-const q = k.data({ users: true })
+const q = dbClient.data({ users: true })
 
 console.log(q.toSQL())  // { sql, values }
 await q.explain()       // EXPLAIN ANALYZE result

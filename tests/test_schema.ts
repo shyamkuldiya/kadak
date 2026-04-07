@@ -38,12 +38,12 @@ async function runTests() {
     console.log("❌ Failure: SQL generation mismatch.");
   }
 
-  // 2. k.push() Test
-  console.log("\n2. k.push() Test (expected fail on mock):");
+  // 2. dbClient.push() Test
+  console.log("\n2. dbClient.push() Test (expected fail on mock):");
   const db = kadak({ url: "postgres://localhost:5432/mock" });
-  const k = db.define({ users, tasks });
+  const dbClient = db.define({ users, tasks });
   try {
-    await k.push();
+    await dbClient.push();
   } catch (e: any) {
     console.log("Caught expected execution error:", e.message);
   }
@@ -52,4 +52,4 @@ async function runTests() {
   await db.close().catch(() => {});
 }
 
-runTests();
+await runTests();

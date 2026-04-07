@@ -33,6 +33,19 @@ declare class ColumnBuilder {
     index(): this;
     build(): ColumnObject;
 }
+declare const types: {
+    string: () => ColumnBuilder;
+    varchar: (len?: number) => ColumnBuilder;
+    int: () => ColumnBuilder;
+    text: () => ColumnBuilder;
+    jsonb: () => ColumnBuilder;
+    timestamp: () => ColumnBuilder;
+    ref: (table: string) => ColumnBuilder;
+    timestamps: () => {
+        createdAt: ColumnObject;
+        updatedAt: ColumnObject;
+    };
+};
 declare const t: {
     string: () => ColumnBuilder;
     varchar: (len?: number) => ColumnBuilder;
@@ -167,22 +180,12 @@ interface KadakInstance<S extends Record<string, any> = any> {
     transaction<T>(fn: (tx: Omit<KadakInstance<S>, "define" | "push" | "transaction" | "close">) => Promise<T>): Promise<T>;
     close(): Promise<void>;
 }
-declare const kadak: {
+interface KadakFactory {
     (config: KadakConfig): KadakInstance<any>;
-    table<N extends string, C extends Record<string, any>>(config: TableConfig<N, C>): Table<N, C>;
-    t: {
-        string: () => ColumnBuilder;
-        varchar: (len?: number) => ColumnBuilder;
-        int: () => ColumnBuilder;
-        text: () => ColumnBuilder;
-        jsonb: () => ColumnBuilder;
-        timestamp: () => ColumnBuilder;
-        ref: (table: string) => ColumnBuilder;
-        timestamps: () => {
-            createdAt: ColumnObject;
-            updatedAt: ColumnObject;
-        };
-    };
-};
+    table: <N extends string, C extends Record<string, any>>(config: TableConfig<N, C>) => Table<N, C>;
+    types: typeof types;
+    t: typeof types;
+}
+declare const kadak: KadakFactory;
 
-export { type Compiled, type InferredQuery, type KadakConfig, type KadakInstance, type KadakQuery, type OrderBy, type Plan, type Predicate, type QueryAST, type RelationAST, buildAST, buildDeleteSQL, buildInsertSQL, buildPlan, buildUpdateSQL, compileSQL, kadak, normalize, t };
+export { type Compiled, type InferredQuery, type KadakConfig, type KadakFactory, type KadakInstance, type KadakQuery, type OrderBy, type Plan, type Predicate, type QueryAST, type RelationAST, buildAST, buildDeleteSQL, buildInsertSQL, buildPlan, buildUpdateSQL, compileSQL, kadak, normalize, t, types };

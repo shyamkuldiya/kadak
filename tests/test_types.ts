@@ -51,4 +51,4 @@ async function testAutocomplete() {
   await db.close().catch(() => {});
 }
 
-testAutocomplete();
+await testAutocomplete();

@@ -37,15 +37,15 @@ async function runRealTest() {
   });
 
   // 2. Explicit Registration
-  const k = db.define({ users, tasks, comments });
+  const dbClient = db.define({ users, tasks, comments });
 
   try {
     // 3. Schema Push
     console.log("\n1. Pushing Schema...");
-    await k.push();
+    await dbClient.push();
     console.log("✅ Schema pushed.");
 
-    // 4. Insert Data using k.insert
+    // 4. Insert Data using dbClient.insert
     console.log("\n2. Inserting Sample Data...");
     const { runQuery } = await import("../src/exec/client.js");
     
@@ -53,23 +53,23 @@ async function runRealTest() {
     await runQuery("DELETE FROM tasks", [], DB_URL);
     await runQuery("DELETE FROM users", [], DB_URL);
 
-    const alice = await k.insert("users", { name: "Alice", email: "alice@example.com" });
-    const bob = await k.insert("users", { name: "Bob", email: "bob@example.com" });
+    const alice = await dbClient.insert("users", { name: "Alice", email: "alice@example.com" });
+    const bob = await dbClient.insert("users", { name: "Bob", email: "bob@example.com" });
     
     const aliceId = alice.id;
     const bobId = bob.id;
 
-    const task1 = await k.insert("tasks", { title: "Task 1", userid: aliceId });
+    const task1 = await dbClient.insert("tasks", { title: "Task 1", userid: aliceId });
     const taskId = task1.id;
 
-    await k.insert("comments", { content: "Great task!", taskid: taskId, authorid: bobId });
-    await k.insert("comments", { content: "I agree.", taskid: taskId, authorid: aliceId });
+    await dbClient.insert("comments", { content: "Great task!", taskid: taskId, authorid: bobId });
+    await dbClient.insert("comments", { content: "I agree.", taskid: taskId, authorid: aliceId });
     
     console.log("✅ Data inserted.");
 
     // 5. Update Data
     console.log("\n3. Updating Alice's name to 'Alicia'...");
-    await k.update("users", {
+    await dbClient.update("users", {
       where: { id: aliceId },
       data: { name: "Alicia" }
     });
@@ -77,7 +77,7 @@ async function runRealTest() {
 
     // 6. Run Nested Query
     console.log("\n4. Running Nested Query: tasks -> comments -> author");
-    let result = await k.data({
+    let result = await dbClient.data({
       tasks: {
         where: { id: taskId },
         comments: {
@@ -90,12 +90,12 @@ async function runRealTest() {
 
     // 7. Delete Data
     console.log("\n5. Deleting Bob...");
-    const deletedUsers = await k.delete("users", { where: { id: bobId } });
+    const deletedUsers = await dbClient.delete("users", { where: { id: bobId } });
     console.log("✅ Bob deleted:", deletedUsers);
 
     // 8. Verify Delete
     console.log("\n6. Running Nested Query again to verify delete...");
-    result = await k.data({
+    result = await dbClient.data({
       tasks: {
         where: { id: taskId },
         comments: {
@@ -126,4 +126,4 @@ async function runRealTest() {
   }
 }
 
-runRealTest();
+await runRealTest();

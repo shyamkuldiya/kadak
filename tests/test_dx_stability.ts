@@ -2,7 +2,7 @@ import { kadak } from "../src/index.js";
 
 async function runDXStabilityTests() {
   const DB_URL = process.env.DATABASE_URL || "postgres://localhost:5432/mock";
-  const { t } = kadak;
+  const { types } = kadak;
 
   console.log("--- Kadak DX & Stability Verification ---");
 
@@ -11,19 +11,19 @@ async function runDXStabilityTests() {
   const profiles = kadak.table({
     name: "profiles",
     columns: {
-      username: t.string().unique().notNull(),
-      bio: t.text().nullable(),
-      ...t.timestamps()
+      username: types.string().unique().notNull(),
+      bio: types.text().nullable(),
+      ...types.timestamps()
     }
   });
 
-  const k = db.define({ profiles });
+  const dbClient = db.define({ profiles });
 
   try {
     // 1. Error Message Polish: Invalid Table
     console.log("\n1. Error: Invalid Table Suggestion:");
     try {
-      await k.data({ profilez: {} } as any);
+      await dbClient.data({ profilez: {} } as any);
     } catch (e: any) {
       console.log("Caught:", e.message);
       if (e.message.includes("Available: profiles")) {
@@ -34,7 +34,7 @@ async function runDXStabilityTests() {
     // 2. Error Message Polish: Invalid Relation
     console.log("\n2. Error: Invalid Relation Suggestion:");
     try {
-      await k.data({ profiles: { bioz: true } } as any);
+      await dbClient.data({ profiles: { bioz: true } } as any);
     } catch (e: any) {
       console.log("Caught:", e.message);
       if (e.message.includes("Did you mean: bio")) {
@@ -45,8 +45,8 @@ async function runDXStabilityTests() {
     // 3. Edge Case: Empty Insert {}
     console.log("\n3. Edge Case: Simple Insert:");
     try {
-      await k.push().catch(() => {}); 
-      const res = await k.insert("profiles", { username: "bot_" + Math.random().toString(36).slice(2, 7) });
+      await dbClient.push().catch(() => {}); 
+      const res = await dbClient.insert("profiles", { username: "bot_" + Math.random().toString(36).slice(2, 7) });
       console.log("✅ Success: Inserted row.");
       console.log("Keys returned:", Object.keys(res));
     } catch (e: any) {
@@ -57,7 +57,7 @@ async function runDXStabilityTests() {
     console.log("\n4. Consistency: Return Shapes:");
     let insertRes: any;
     try {
-      insertRes = await k.insert("profiles", { username: "alice_" + Date.now() });
+      insertRes = await dbClient.insert("profiles", { username: "alice_" + Date.now() });
     } catch (e) {
       insertRes = { id: 1, username: 'alice', bio: null, createdAt: new Date(), updatedAt: new Date() };
     }
@@ -66,7 +66,7 @@ async function runDXStabilityTests() {
     
     let queryRes: any;
     try {
-      queryRes = await k.data({ profiles: { where: { id: insertRes.id } } });
+      queryRes = await dbClient.data({ profiles: { where: { id: insertRes.id } } });
     } catch (e) {
       queryRes = [{ id: 1, username: 'alice', bio: null, createdAt: new Date(), updatedAt: new Date() }];
     }
@@ -94,4 +94,4 @@ async function runDXStabilityTests() {
   }
 }
 
-runDXStabilityTests();
+await runDXStabilityTests();

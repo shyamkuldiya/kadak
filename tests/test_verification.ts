@@ -9,12 +9,12 @@ async function runVerification() {
   const tasks = kadak.table({ name: "tasks", columns: { id: "tasks.id", userid: "ref:users", comments: "comments.taskid" } });
   const comments = kadak.table({ name: "comments", columns: { id: "comments.id", taskid: "ref:tasks", author: "users.id" } });
 
-  const k = db.define({ users, tasks, comments });
+  const dbClient = db.define({ users, tasks, comments });
 
   console.log("\n🚀 KADAK MANUAL VERIFICATION VIEW\n" + "=".repeat(40));
 
   try {
-    const result = await k.data({
+    const result = await dbClient.data({
       tasks: {
         comments: {
           author: true
@@ -26,7 +26,7 @@ async function runVerification() {
     
     // Check for root-level duplicates
     const ids = new Set();
-    const duplicates = result.filter((t: any) => ids.has(t.id) || !ids.add(t.id));
+    const duplicates = result.filter((row: any) => ids.has(row.id) || !ids.add(row.id));
     if (duplicates.length > 0) {
       console.log(`🚨 DUPLICATES DETECTED: ${duplicates.length} duplicate IDs found!`);
     } else {
@@ -78,4 +78,4 @@ async function runVerification() {
   }
 }
 
-runVerification();
+await runVerification();

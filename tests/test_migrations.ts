@@ -2,7 +2,7 @@ import { kadak } from "../src/index.js";
 
 async function runMigrationTests() {
   const DB_URL = process.env.DATABASE_URL || "postgres://localhost:5432/mock";
-  const { t } = kadak;
+  const { types } = kadak;
 
   console.log("--- Kadak Migration Tracking Tests ---");
 
@@ -19,27 +19,27 @@ async function runMigrationTests() {
     const testTable = kadak.table({
       name: "migration_test",
       columns: {
-        name: t.string()
+        name: types.string()
       }
     });
-    const k1 = db.define({ testTable });
-    await k1.push();
+    const dbClient1 = db.define({ testTable });
+    await dbClient1.push();
 
     // 2. Second Push (No Changes)
     console.log("\n2. Second Push (No Changes):");
-    await k1.push();
+    await dbClient1.push();
 
     // 3. Third Push (Add Column)
     console.log("\n3. Third Push (Add Column):");
     const testTableUpdated = kadak.table({
       name: "migration_test",
       columns: {
-        name: t.string(),
-        age: t.int().default(18)
+        name: types.string(),
+        age: types.int().default(18)
       }
     });
-    const k2 = db.define({ testTable: testTableUpdated });
-    await k2.push();
+    const dbClient2 = db.define({ testTable: testTableUpdated });
+    await dbClient2.push();
 
     // Verification
     console.log("\n4. Verification:");
@@ -70,4 +70,4 @@ async function runMigrationTests() {
   }
 }
 
-runMigrationTests();
+await runMigrationTests();

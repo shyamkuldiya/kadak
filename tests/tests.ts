@@ -35,16 +35,16 @@ async function runTests() {
     url: "postgres://localhost:5432/mock"
   });
 
-  const k = db.define({ tasks, comments, users });
+  const dbClient = db.define({ tasks, comments, users });
 
   // 1. Simple query
   console.log("\n1. Simple Query Test:");
-  const q1 = await k.data({ tasks: { user: true } }, { debug: true });
+  const q1 = await dbClient.data({ tasks: { user: true } }, { debug: true });
   console.log("SQL:", q1.sql);
 
   // 2. Nested query
   console.log("\n2. Nested Query Test:");
-  const q2 = await k.data({
+  const q2 = await dbClient.data({
     tasks: {
       comments: {
         author: true
@@ -55,7 +55,7 @@ async function runTests() {
 
   // 3. Where query
   console.log("\n3. Where Query Test:");
-  const q3 = await k.data({
+  const q3 = await dbClient.data({
     tasks: {
       where: { id: 1 }
     }
@@ -101,4 +101,4 @@ async function runTests() {
   await db.close().catch(() => {});
 }
 
-runTests();
+await runTests();

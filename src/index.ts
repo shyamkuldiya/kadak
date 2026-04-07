@@ -5,7 +5,7 @@ import { runQuery, closePool, getTransactionClient } from "./exec/client.js";
 import { normalize } from "./exec/normalize.js";
 import { buildInsertSQL, buildUpdateSQL, buildDeleteSQL } from "./exec/mutations.js";
 import { validateInput } from "./schema/validator.js";
-import { pushSchema, Table, TableConfig, SchemaDefinition, ColumnObject, ColumnBuilder, t } from "./schema/migrator.js";
+import { pushSchema, Table, TableConfig, SchemaDefinition, ColumnObject, ColumnBuilder, types } from "./schema/migrator.js";
 import pg from "pg";
 
 export type KadakConfig = {
@@ -59,9 +59,16 @@ export interface KadakInstance<S extends Record<string, any> = any> {
   transaction<T>(fn: (tx: Omit<KadakInstance<S>, "define" | "push" | "transaction" | "close">) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
+
+export interface KadakFactory {
+  (config: KadakConfig): KadakInstance<any>;
+  table: <N extends string, C extends Record<string, any>>(config: TableConfig<N, C>) => Table<N, C>;
+  types: typeof types;
+  t: typeof types;
+}
 // ------------------------------
 
-export const kadak = (config: KadakConfig): KadakInstance<any> => {
+export const kadak = ((config: KadakConfig): KadakInstance<any> => {
   let _currentSchema: Record<string, Record<string, any>> = {};
   let _rawDefinition: SchemaDefinition = {};
   const _url = config.url;
@@ -95,7 +102,7 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
     return queryObj;
   };
 
-  const instance: KadakInstance<any> = {
+  const dbClient: KadakInstance<any> = {
     define(tables: Record<string, Table<any, any>>) {
       for (const [key, table] of Object.entries(tables)) {
         const tableName = table.config.name;
@@ -118,7 +125,7 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
           }
         }
       }
-      return instance as any;
+      return dbClient as any;
     },
 
     async push() {
@@ -214,9 +221,9 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
         await client.query("BEGIN");
         const tx = {
           data: (input: any, opts: any = {}) => data(input, { ...opts, client }),
-          insert: (table: any, d: any, opts: any = {}) => instance.insert(table, d, { ...opts, client }),
-          update: (table: any, opts: any) => instance.update(table, { ...opts, client }),
-          delete: (table: any, opts: any) => instance.delete(table, { ...opts, client })
+          insert: (table: any, d: any, opts: any = {}) => dbClient.insert(table, d, { ...opts, client }),
+          update: (table: any, opts: any) => dbClient.update(table, { ...opts, client }),
+          delete: (table: any, opts: any) => dbClient.delete(table, { ...opts, client })
         };
         const result = await fn(tx);
         await client.query("COMMIT");
@@ -237,15 +244,16 @@ export const kadak = (config: KadakConfig): KadakInstance<any> => {
     close: closePool
   };
 
-  return instance;
-};
+  return dbClient;
+}) as KadakFactory;
 
 kadak.table = <N extends string, C extends Record<string, any>>(config: TableConfig<N, C>): Table<N, C> => {
   return { config };
 };
 
-kadak.t = t;
+kadak.types = types;
+kadak.t = types;
 
 export * from "./query/index.js";
 export * from "./exec/index.js";
-export { t } from "./schema/migrator.js";
+export { types, t } from "./schema/migrator.js";

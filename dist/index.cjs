@@ -41,7 +41,8 @@ __export(index_exports, {
   kadak: () => kadak,
   normalize: () => normalize,
   runQuery: () => runQuery,
-  t: () => t
+  t: () => t,
+  types: () => types
 });
 module.exports = __toCommonJS(index_exports);
 
@@ -403,7 +404,7 @@ var ColumnBuilder = class {
     return this.obj;
   }
 };
-var t = {
+var types = {
   string: () => new ColumnBuilder("string"),
   varchar: (len) => new ColumnBuilder("varchar").length(len || 255),
   int: () => new ColumnBuilder("int"),
@@ -421,6 +422,7 @@ var t = {
     updatedAt: { type: "timestamp", default: "NOW()", autoUpdate: true }
   })
 };
+var t = types;
 function generateColumnSQL(colName, rawDef, tableName, indexStatements) {
   if (typeof rawDef === "string" && rawDef.includes(".")) {
     return { columnSQL: null };
@@ -551,7 +553,7 @@ async function pushSchema(definition, url) {
 }
 
 // src/index.ts
-var kadak = (config) => {
+var kadak = ((config) => {
   let _currentSchema = {};
   let _rawDefinition = {};
   const _url = config.url;
@@ -581,7 +583,7 @@ var kadak = (config) => {
     queryObj.trace = () => ({ ast, plan, sql, values });
     return queryObj;
   };
-  const instance = {
+  const dbClient = {
     define(tables) {
       for (const [key, table] of Object.entries(tables)) {
         const tableName = table.config.name;
@@ -601,7 +603,7 @@ var kadak = (config) => {
           }
         }
       }
-      return instance;
+      return dbClient;
     },
     async push() {
       if (process.env.NODE_ENV === "production") {
@@ -679,9 +681,9 @@ var kadak = (config) => {
         await client.query("BEGIN");
         const tx = {
           data: (input, opts = {}) => data(input, { ...opts, client }),
-          insert: (table, d, opts = {}) => instance.insert(table, d, { ...opts, client }),
-          update: (table, opts) => instance.update(table, { ...opts, client }),
-          delete: (table, opts) => instance.delete(table, { ...opts, client })
+          insert: (table, d, opts = {}) => dbClient.insert(table, d, { ...opts, client }),
+          update: (table, opts) => dbClient.update(table, { ...opts, client }),
+          delete: (table, opts) => dbClient.delete(table, { ...opts, client })
         };
         const result = await fn(tx);
         await client.query("COMMIT");
@@ -699,12 +701,13 @@ var kadak = (config) => {
     data,
     close: closePool
   };
-  return instance;
-};
+  return dbClient;
+});
 kadak.table = (config) => {
   return { config };
 };
-kadak.t = t;
+kadak.types = types;
+kadak.t = types;
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   buildAST,
@@ -718,6 +721,7 @@ kadak.t = t;
   kadak,
   normalize,
   runQuery,
-  t
+  t,
+  types
 });
 //# sourceMappingURL=index.cjs.map
