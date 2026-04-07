@@ -5,6 +5,4 @@ const db = kadak({
   url: process.env.DATABASE_URL || "postgres://localhost:5432/mock"
 });
 
-export const dbClient = db.define({ users });
-
-export default dbClient;
+export default db.define({ users });
