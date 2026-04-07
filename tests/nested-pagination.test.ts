@@ -26,13 +26,13 @@ describe("nested pagination", () => {
   });
   const dbClient = db.define({ posts, comments, users });
 
-  it("throws on invalid nested take", () => {
+  it("throws when nested pagination is used", () => {
     expect(() => dbClient.data({
       posts: {
         comments: {
-          take: 0
+          take: 5
         }
       }
-    } as any)).toThrow("Kadak Error: nested pagination is not supported yet");
+    } as never)).toThrow("Kadak Error: nested pagination is not supported yet");
   });
 });
