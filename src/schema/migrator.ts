@@ -140,7 +140,6 @@ export const types = {
     updatedAt: { type: "timestamp", default: "NOW()", autoUpdate: true } as ColumnObject
   })
 };
-export const t = types;
 // -----------------------------
 
 function generateColumnSQL(colName: string, rawDef: any, tableName: string, indexStatements: string[]): { columnSQL: string | null, fkSQL?: string } {

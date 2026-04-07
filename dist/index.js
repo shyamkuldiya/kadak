@@ -475,7 +475,6 @@ var types = {
     updatedAt: { type: "timestamp", default: "NOW()", autoUpdate: true }
   })
 };
-var t = types;
 function generateColumnSQL(colName, rawDef, tableName, indexStatements) {
   if (typeof rawDef === "string" && rawDef.includes(".")) {
     return { columnSQL: null };
@@ -621,6 +620,7 @@ var kadak = ((config) => {
   let _rawDefinition = {};
   const _url = config.url;
   const data = (input, options = {}) => {
+    const resolvedUrl = _url || process.env.DATABASE_URL;
     validateInput(input, _currentSchema);
     const ast = buildAST(input);
     const plan = buildPlan(ast, _currentSchema);
@@ -628,7 +628,7 @@ var kadak = ((config) => {
     const execution = async () => {
       let rows = [];
       try {
-        rows = await runQuery(sql, values, _url, options.client);
+        rows = await runQuery(sql, values, resolvedUrl, options.client);
       } catch (e) {
         if (options.debug) console.error("\u274C Kadak Execution Error:", e.message);
         rows = [];
@@ -641,7 +641,7 @@ var kadak = ((config) => {
     queryObj.toSQL = () => ({ sql, values });
     queryObj.explain = async () => {
       const explainSql = `EXPLAIN ANALYZE ${sql}`;
-      return await runQuery(explainSql, values, _url, options.client);
+      return await runQuery(explainSql, values, resolvedUrl, options.client);
     };
     queryObj.trace = () => ({ ast, plan, sql, values });
     return queryObj;
@@ -690,12 +690,14 @@ var kadak = ((config) => {
       return dbClient;
     },
     async push() {
+      const resolvedUrl = _url || process.env.DATABASE_URL;
       if (process.env.NODE_ENV === "production") {
         console.warn("\u26A0\uFE0F [Kadak] push() called in production. Ensure this is intentional.");
       }
-      await pushSchema(dbClient.schema, _url);
+      await pushSchema(dbClient.schema, resolvedUrl);
     },
     async insert(table, data2, options = {}) {
+      const resolvedUrl = _url || process.env.DATABASE_URL;
       const tableName = String(table);
       const tableSchema = _currentSchema[tableName];
       if (!tableSchema) {
@@ -707,11 +709,12 @@ var kadak = ((config) => {
         }
       }
       const { sql, values } = buildInsertSQL(tableName, data2);
-      const rows = await runQuery(sql, values, _url, options.client);
+      const rows = await runQuery(sql, values, resolvedUrl, options.client);
       const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema)[0];
     },
     async update(table, options) {
+      const resolvedUrl = _url || process.env.DATABASE_URL;
       const tableName = String(table);
       const tableSchema = _currentSchema[tableName];
       if (!tableSchema) {
@@ -736,11 +739,12 @@ var kadak = ((config) => {
         }
       }
       const { sql, values } = buildUpdateSQL(tableName, options.where, options.data);
-      const rows = await runQuery(sql, values, _url, options.client);
+      const rows = await runQuery(sql, values, resolvedUrl, options.client);
       const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema);
     },
     async delete(table, options) {
+      const resolvedUrl = _url || process.env.DATABASE_URL;
       const tableName = String(table);
       const tableSchema = _currentSchema[tableName];
       if (!tableSchema) {
@@ -755,12 +759,13 @@ var kadak = ((config) => {
         }
       }
       const { sql, values } = buildDeleteSQL(tableName, options.where);
-      const rows = await runQuery(sql, values, _url, options.client);
+      const rows = await runQuery(sql, values, resolvedUrl, options.client);
       const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema);
     },
     async transaction(fn) {
-      const client = await getTransactionClient(_url);
+      const resolvedUrl = _url || process.env.DATABASE_URL;
+      const client = await getTransactionClient(resolvedUrl);
       try {
         await client.query("BEGIN");
         const tx = {
@@ -791,7 +796,6 @@ kadak.table = (config) => {
   return { config };
 };
 kadak.types = types;
-kadak.t = types;
 export {
   buildAST,
   buildDeleteSQL,
@@ -804,7 +808,6 @@ export {
   kadak,
   normalize,
   runQuery,
-  t,
   types
 };
 //# sourceMappingURL=index.js.map

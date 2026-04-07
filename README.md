@@ -174,6 +174,8 @@ npx kadak push
 ```
 
 The CLI loads the default export from `kadak.config.ts` as `dbClient`.
+Kadak also creates an internal `_kadak_migrations` table to track applied schema hashes.
+That table is managed by Kadak and should not be defined manually.
 
 ## License
 

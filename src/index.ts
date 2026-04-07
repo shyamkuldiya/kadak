@@ -114,7 +114,6 @@ export interface KadakFactory {
   (config: KadakConfig): KadakInstance;
   table: <N extends string, C extends Record<string, ColumnInput>>(config: TableConfig<N, C>) => Table<N, C>;
   types: typeof types;
-  t: typeof types;
 }
 // ------------------------------
 
@@ -124,6 +123,7 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
   const _url = config.url;
 
   const data = <T = unknown>(input: Record<string, unknown>, options: { debug?: boolean; client?: pg.PoolClient } = {}): KadakQuery<T> => {
+    const resolvedUrl = _url || process.env.DATABASE_URL;
     validateInput(input, _currentSchema);
     const ast = buildAST(input);
     const plan = buildPlan(ast, _currentSchema);
@@ -132,7 +132,7 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
     const execution = async () => {
       let rows: unknown[] = [];
       try {
-        rows = await runQuery(sql, values, _url, options.client);
+        rows = await runQuery(sql, values, resolvedUrl, options.client);
       } catch (e) {
         if (options.debug) console.error("❌ Kadak Execution Error:", (e as Error).message);
         rows = [];
@@ -146,7 +146,7 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
     queryObj.toSQL = () => ({ sql, values });
     queryObj.explain = async () => {
       const explainSql = `EXPLAIN ANALYZE ${sql}`;
-      return await runQuery(explainSql, values, _url, options.client);
+      return await runQuery(explainSql, values, resolvedUrl, options.client);
     };
     queryObj.trace = () => ({ ast, plan, sql, values });
     return queryObj;
@@ -200,13 +200,15 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
     },
 
     async push() {
+      const resolvedUrl = _url || process.env.DATABASE_URL;
       if (process.env.NODE_ENV === "production") {
         console.warn("⚠️ [Kadak] push() called in production. Ensure this is intentional.");
       }
-      await pushSchema(dbClient.schema, _url);
+      await pushSchema(dbClient.schema, resolvedUrl as string);
     },
 
     async insert<T extends string>(table: T, data: Record<string, unknown>, options: { client?: pg.PoolClient } = {}) {
+      const resolvedUrl = _url || process.env.DATABASE_URL;
       const tableName = String(table);
       const tableSchema = _currentSchema[tableName];
       if (!tableSchema) {
@@ -220,13 +222,14 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
       }
 
       const { sql, values } = buildInsertSQL(tableName, data);
-      const rows = await runQuery(sql, values, _url, options.client);
+      const rows = await runQuery(sql, values, resolvedUrl, options.client);
       
       const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema)[0];
     },
 
     async update<T extends string>(table: T, options: { where: Record<string, unknown>; data: Record<string, unknown>; client?: pg.PoolClient }) {
+      const resolvedUrl = _url || process.env.DATABASE_URL;
       const tableName = String(table);
       const tableSchema = _currentSchema[tableName];
       if (!tableSchema) {
@@ -256,13 +259,14 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
       }
 
       const { sql, values } = buildUpdateSQL(tableName, options.where, options.data);
-      const rows = await runQuery(sql, values, _url, options.client);
+      const rows = await runQuery(sql, values, resolvedUrl, options.client);
       
       const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema);
     },
 
     async delete<T extends string>(table: T, options: { where: Record<string, unknown>; client?: pg.PoolClient }) {
+      const resolvedUrl = _url || process.env.DATABASE_URL;
       const tableName = String(table);
       const tableSchema = _currentSchema[tableName];
       if (!tableSchema) {
@@ -280,14 +284,15 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
       }
 
       const { sql, values } = buildDeleteSQL(tableName, options.where);
-      const rows = await runQuery(sql, values, _url, options.client);
+      const rows = await runQuery(sql, values, resolvedUrl, options.client);
       
       const ast = { root: tableName, relations: [] };
       return normalize(rows, ast, _currentSchema);
     },
 
     async transaction<T>(fn: (tx: Omit<KadakInstance, "schema" | "define" | "push" | "transaction" | "close">) => Promise<T>) {
-      const client = await getTransactionClient(_url);
+      const resolvedUrl = _url || process.env.DATABASE_URL;
+      const client = await getTransactionClient(resolvedUrl);
       try {
         await client.query("BEGIN");
         const tx = {
@@ -323,8 +328,7 @@ kadak.table = <N extends string, C extends Record<string, any>>(config: TableCon
 };
 
 kadak.types = types;
-kadak.t = types;
 
 export * from "./query/index.js";
 export * from "./exec/index.js";
-export { types, t } from "./schema/migrator.js";
+export { types } from "./schema/migrator.js";

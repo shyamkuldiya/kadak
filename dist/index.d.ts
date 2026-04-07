@@ -92,50 +92,6 @@ declare const types: {
         updatedAt: ColumnObject;
     };
 };
-declare const t: {
-    string: () => ColumnBuilder<{
-        type: "string";
-    }>;
-    varchar: (len?: number) => ColumnBuilder<{
-        type: "varchar";
-        length?: number;
-    }>;
-    int: () => ColumnBuilder<{
-        type: "int";
-    }>;
-    text: () => ColumnBuilder<{
-        type: "text";
-    }>;
-    jsonb: () => ColumnBuilder<{
-        type: "jsonb";
-    }>;
-    timestamp: () => ColumnBuilder<{
-        type: "timestamp";
-    }>;
-    array: <T extends "string" | "int">(innerType: ColumnBuilder<{
-        type: T;
-    }>) => ColumnBuilder<{
-        type: "array";
-        array: {
-            type: T;
-        };
-    }>;
-    ref: <const TableName extends string, const RelationName extends string, const To extends string = "id">(table: TableName, opts: {
-        as: RelationName;
-        to?: To;
-    }) => ColumnBuilder<{
-        type: "int";
-        ref: {
-            table: TableName;
-            as: RelationName;
-            to: To;
-        };
-    }>;
-    timestamps: () => {
-        createdAt: ColumnObject;
-        updatedAt: ColumnObject;
-    };
-};
 
 type Predicate = {
     field: string;
@@ -319,8 +275,7 @@ interface KadakFactory {
     (config: KadakConfig): KadakInstance;
     table: <N extends string, C extends Record<string, ColumnInput>>(config: TableConfig<N, C>) => Table<N, C>;
     types: typeof types;
-    t: typeof types;
 }
 declare const kadak: KadakFactory;
 
-export { type Compiled, type InferredQuery, type KadakConfig, type KadakFactory, type KadakInstance, type KadakQuery, type OrderBy, type Plan, type Predicate, type QueryAST, type RelationAST, buildAST, buildDeleteSQL, buildInsertSQL, buildPlan, buildUpdateSQL, compileSQL, kadak, normalize, t, types };
+export { type Compiled, type InferredQuery, type KadakConfig, type KadakFactory, type KadakInstance, type KadakQuery, type OrderBy, type Plan, type Predicate, type QueryAST, type RelationAST, buildAST, buildDeleteSQL, buildInsertSQL, buildPlan, buildUpdateSQL, compileSQL, kadak, normalize, types };
