@@ -2,9 +2,10 @@
 function buildAST(queryInput) {
   const rootKey = Object.keys(queryInput)[0];
   const rootValue = queryInput[rootKey];
-  const { where, relations, orderBy } = parseNode(rootValue);
+  const { where, relations, orderBy, select } = parseNode(rootValue);
   return {
     root: rootKey,
+    select,
     where: where.length > 0 ? where : void 0,
     orderBy,
     relations
@@ -14,6 +15,7 @@ function parseNode(input) {
   const where = [];
   const relations = [];
   let orderBy;
+  let select;
   for (const [key, value] of Object.entries(input)) {
     if (key === "where") {
       const whereObj = value;
@@ -25,16 +27,22 @@ function parseNode(input) {
       const field = Object.keys(orderObj)[0];
       const direction = orderObj[field].toLowerCase();
       orderBy = { field, direction };
+    } else if (key === "select") {
+      select = {};
+      for (const [field, enabled] of Object.entries(value)) {
+        if (enabled) select[field] = true;
+      }
     } else if (value === true || typeof value === "object" && value !== null) {
       const relationInput = value === true ? {} : value;
-      const { relations: nestedRelations } = parseNode(relationInput);
+      const { relations: nestedRelations, select: nestedSelect } = parseNode(relationInput);
       relations.push({
         name: key,
+        select: nestedSelect,
         relations: nestedRelations
       });
     }
   }
-  return { where, relations, orderBy };
+  return { where, relations, orderBy, select };
 }
 
 // src/query/planner.ts
@@ -77,24 +85,39 @@ function findTable(id, plan) {
 }
 
 // src/query/compiler.ts
-function compileSQL(plan, schema) {
+function compileSQL(plan, ast, schema) {
   const values = [];
   const selections = [];
-  const addTableColumns = (tableName, alias) => {
+  const addTableColumns = (tableName, alias, select) => {
     const tableId = alias || tableName;
     const tableSchema = schema[tableName] || {};
-    selections.push(`${tableId}.id AS "${tableId}__id"`);
-    for (const [field, mapping] of Object.entries(tableSchema)) {
+    const fields = select ? Object.keys(select) : Object.keys(tableSchema).filter((field) => {
+      const mapping = tableSchema[field];
+      if (field === "id") return false;
+      if (typeof mapping === "string" && mapping.includes(".")) return false;
+      if (typeof mapping === "object" && mapping !== null && "table" in mapping && "as" in mapping) return false;
+      return true;
+    });
+    const hasId = !select || select.id;
+    if (hasId) {
+      selections.push(`${tableId}.id AS "${tableId}__id"`);
+    }
+    for (const field of fields) {
       if (field === "id") continue;
-      if (typeof mapping === "string" && mapping.includes(".")) continue;
-      if (typeof mapping === "object" && mapping !== null && "table" in mapping && "as" in mapping) continue;
       selections.push(`${tableId}."${field}" AS "${tableId}__${field}"`);
     }
   };
-  addTableColumns(plan.from);
-  for (const join of plan.joins) {
-    addTableColumns(join.table, join.alias);
-  }
+  const walkRelations = (tableName, relations) => {
+    for (const rel of relations) {
+      const mapping = schema[tableName]?.[rel.name];
+      if (!mapping || typeof mapping !== "object" || !("table" in mapping)) continue;
+      const alias = mapping.as !== mapping.table ? mapping.as : void 0;
+      addTableColumns(mapping.table, alias, rel.select);
+      walkRelations(mapping.table, rel.relations);
+    }
+  };
+  addTableColumns(plan.from, void 0, ast.select);
+  walkRelations(plan.from, ast.relations);
   let sql = `SELECT ${selections.join(", ")} FROM ${plan.from}
 `;
   for (const join of plan.joins) {
@@ -290,6 +313,13 @@ function validateNode(tableName, nodeInput, schema) {
       }
     } else if (key === "limit" || key === "orderBy") {
       continue;
+    } else if (key === "select") {
+      const selectObj = value;
+      for (const field of Object.keys(selectObj)) {
+        if (field !== "id" && !tableSchema[field]) {
+          throw new Error(`Kadak Error: invalid field '${field}' on '${tableName}'`);
+        }
+      }
     } else {
       const target = tableSchema[key];
       if (!target) {
@@ -549,7 +579,7 @@ var kadak = ((config) => {
     validateInput(input, _currentSchema);
     const ast = buildAST(input);
     const plan = buildPlan(ast, _currentSchema);
-    const { text: sql, values } = compileSQL(plan, _currentSchema);
+    const { text: sql, values } = compileSQL(plan, ast, _currentSchema);
     const execution = async () => {
       let rows = [];
       try {

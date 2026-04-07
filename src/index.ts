@@ -87,7 +87,7 @@ export const kadak = ((config: KadakConfig): KadakInstance<any> => {
     validateInput(input, _currentSchema);
     const ast = buildAST(input);
     const plan = buildPlan(ast, _currentSchema);
-    const { text: sql, values } = compileSQL(plan, _currentSchema);
+    const { text: sql, values } = compileSQL(plan, ast, _currentSchema);
     
     const execution = async () => {
       let rows: any[] = [];

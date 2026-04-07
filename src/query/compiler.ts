@@ -1,39 +1,50 @@
 import { Plan } from "./planner.js";
+import { QueryAST, RelationAST } from "./ast.js";
 
 export type Compiled = {
   text: string;
   values: unknown[];
 };
 
-export function compileSQL(plan: Plan, schema: Record<string, Record<string, any>>): Compiled {
+export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Record<string, any>>): Compiled {
   const values: unknown[] = [];
   const selections: string[] = [];
 
-  // Helper to add columns for a table
-  const addTableColumns = (tableName: string, alias?: string) => {
+  const addTableColumns = (tableName: string, alias?: string, select?: Record<string, true>) => {
     const tableId = alias || tableName;
     const tableSchema = schema[tableName] || {};
-    
-    // Always include ID
-    selections.push(`${tableId}.id AS "${tableId}__id"`);
-    
-    // Include only fields that are NOT relations
-    for (const [field, mapping] of Object.entries(tableSchema)) {
+    const fields = select ? Object.keys(select) : Object.keys(tableSchema).filter(field => {
+      const mapping = tableSchema[field];
+      if (field === "id") return false;
+      if (typeof mapping === "string" && mapping.includes(".")) return false;
+      if (typeof mapping === "object" && mapping !== null && "table" in mapping && "as" in mapping) return false;
+      return true;
+    });
+
+    const hasId = !select || select.id;
+    if (hasId) {
+      selections.push(`${tableId}.id AS "${tableId}__id"`);
+    }
+
+    for (const field of fields) {
       if (field === "id") continue;
-      if (typeof mapping === "string" && mapping.includes(".")) continue;
-      if (typeof mapping === "object" && mapping !== null && "table" in mapping && "as" in mapping) continue;
-      // Quote both the field and the alias to preserve case
       selections.push(`${tableId}."${field}" AS "${tableId}__${field}"`);
     }
   };
 
-  // Select for root
-  addTableColumns(plan.from);
+  const walkRelations = (tableName: string, relations: RelationAST[]) => {
+    for (const rel of relations) {
+      const mapping = schema[tableName]?.[rel.name];
+      if (!mapping || typeof mapping !== "object" || !("table" in mapping)) continue;
+      const alias = mapping.as !== mapping.table ? mapping.as : undefined;
+      addTableColumns(mapping.table, alias, rel.select);
+      walkRelations(mapping.table, rel.relations);
+    }
+  };
 
-  // Select for joins
-  for (const join of plan.joins) {
-    addTableColumns(join.table, join.alias);
-  }
+  // Select for root
+  addTableColumns(plan.from, undefined, ast.select);
+  walkRelations(plan.from, ast.relations);
 
   let sql = `SELECT ${selections.join(", ")} FROM ${plan.from}\n`;
 

@@ -2,6 +2,7 @@ export type Predicate = { field: string; value: unknown };
 
 export type RelationAST = {
   name: string;
+  select?: Record<string, true>;
   relations: RelationAST[];
 };
 
@@ -12,6 +13,7 @@ export type OrderBy = {
 
 export type QueryAST = {
   root: string;
+  select?: Record<string, true>;
   where?: Predicate[];
   orderBy?: OrderBy;
   relations: RelationAST[];

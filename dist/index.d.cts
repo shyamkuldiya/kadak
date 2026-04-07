@@ -89,6 +89,7 @@ type Predicate = {
 };
 type RelationAST = {
     name: string;
+    select?: Record<string, true>;
     relations: RelationAST[];
 };
 type OrderBy = {
@@ -97,6 +98,7 @@ type OrderBy = {
 };
 type QueryAST = {
     root: string;
+    select?: Record<string, true>;
     where?: Predicate[];
     orderBy?: OrderBy;
     relations: RelationAST[];
@@ -120,7 +122,7 @@ type Compiled = {
     text: string;
     values: unknown[];
 };
-declare function compileSQL(plan: Plan, schema: Record<string, Record<string, any>>): Compiled;
+declare function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Record<string, any>>): Compiled;
 
 /**
  * Normalizes flat SQL rows into a nested object graph based on the AST structure.

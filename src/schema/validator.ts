@@ -27,6 +27,13 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
       }
     } else if (key === "limit" || key === "orderBy") {
        continue;
+    } else if (key === "select") {
+      const selectObj = value as Record<string, unknown>;
+      for (const field of Object.keys(selectObj)) {
+        if (field !== "id" && !tableSchema[field]) {
+          throw new Error(`Kadak Error: invalid field '${field}' on '${tableName}'`);
+        }
+      }
     } else {
       // It's a relation
       const target = tableSchema[key];
