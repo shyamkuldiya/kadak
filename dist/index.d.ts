@@ -20,6 +20,7 @@ interface TableConfig<N extends string = string, C extends Record<string, Column
 interface Table<N extends string = string, C extends Record<string, ColumnDef> = Record<string, ColumnDef>> {
     config: TableConfig<N, C>;
 }
+type SchemaDefinition = Record<string, Record<string, ColumnDef>>;
 declare class ColumnBuilder {
     private obj;
     constructor(type?: ColumnObject["type"]);
@@ -160,7 +161,7 @@ type InferredQuery<S> = {
     [K in keyof S]?: TableQuery<S, K>;
 };
 interface KadakInstance<S extends Record<string, any> = any> {
-    schema: Record<string, Record<string, any>>;
+    readonly schema: Readonly<SchemaDefinition>;
     define<Tables extends Record<string, Table<any, any>>>(tables: Tables): KadakInstance<{
         [K in keyof Tables]: Tables[K]["config"]["columns"];
     }>;

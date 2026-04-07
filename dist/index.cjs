@@ -584,7 +584,9 @@ var kadak = ((config) => {
     return queryObj;
   };
   const dbClient = {
-    schema: _currentSchema,
+    get schema() {
+      return _rawDefinition;
+    },
     define(tables) {
       for (const [key, table] of Object.entries(tables)) {
         const tableName = table.config.name;
@@ -604,14 +606,13 @@ var kadak = ((config) => {
           }
         }
       }
-      dbClient.schema = _currentSchema;
       return dbClient;
     },
     async push() {
       if (process.env.NODE_ENV === "production") {
         console.warn("\u26A0\uFE0F [Kadak] push() called in production. Ensure this is intentional.");
       }
-      await pushSchema(_rawDefinition, _url);
+      await pushSchema(dbClient.schema, _url);
     },
     async insert(table, data2, options = {}) {
       const tableName = String(table);

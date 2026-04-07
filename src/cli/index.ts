@@ -25,18 +25,18 @@ async function run() {
 
   const dbClient = config.default;
   if (!dbClient || typeof dbClient !== "object") {
-    console.error("❌ Kadak Error: 'kadak.config.ts' must default-export an initialized dbClient instance.");
+    console.error("Kadak Error: invalid dbClient export");
     process.exit(1);
   }
 
   try {
     if (typeof dbClient.push !== "function") {
-      console.error("❌ Kadak Error: Default export is not a valid dbClient instance. Missing push().");
+      console.error("Kadak Error: invalid dbClient export");
       process.exit(1);
     }
 
     if (!dbClient.schema || typeof dbClient.schema !== "object") {
-      console.error("❌ Kadak Error: Default export dbClient is missing schema metadata.");
+      console.error("Kadak Error: schema not found on dbClient");
       process.exit(1);
     }
 
