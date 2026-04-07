@@ -16,8 +16,6 @@ npm install @shyk/kadak
 
 ## Full Example
 
-`tables/users.ts`
-
 ```typescript
 import { kadak } from "@shyk/kadak"
 
@@ -35,8 +33,6 @@ export const users = kadak.table({
 })
 ```
 
-`tables/posts.ts`
-
 ```typescript
 import { kadak } from "@shyk/kadak"
 
@@ -53,8 +49,6 @@ export const posts = kadak.table({
   }
 })
 ```
-
-`tables/comments.ts`
 
 ```typescript
 import { kadak } from "@shyk/kadak"
@@ -76,11 +70,43 @@ export const comments = kadak.table({
 
 ```typescript
 import { kadak } from "@shyk/kadak"
-import { users } from "./tables/users"
-import { posts } from "./tables/posts"
-import { comments } from "./tables/comments"
 
 const db = kadak({ url: process.env.DATABASE_URL! })
+
+const { types } = kadak
+
+const users = kadak.table({
+  name: "users",
+  columns: {
+    name: types.string().min(2).max(80).lowercase().unique(),
+    email: types.string().min(3).max(120).unique(),
+    age: types.int().min(0).max(120),
+    tags: types.array(types.string()),
+    ...types.timestamps()
+  }
+})
+
+const posts = kadak.table({
+  name: "posts",
+  columns: {
+    title: types.string().min(3).max(120),
+    body: types.string().min(1),
+    tags: types.array(types.string()),
+    authorId: types.ref("users", { as: "author" }),
+    ...types.timestamps()
+  }
+})
+
+const comments = kadak.table({
+  name: "comments",
+  columns: {
+    body: types.string().min(1).max(500),
+    postId: types.ref("posts", { as: "post" }),
+    authorId: types.ref("users", { as: "author" }),
+    ...types.timestamps()
+  }
+})
+
 const dbClient = db.define({ users, posts, comments })
 
 export default dbClient
