@@ -3,7 +3,18 @@ import { createHash } from "crypto";
 
 export type ColumnObject = {
   type?: "string" | "varchar" | "int" | "text" | "jsonb" | "timestamp" | string;
-  ref?: string;
+  min?: number;
+  max?: number;
+  lowercase?: boolean;
+  array?: {
+    type: "string" | "int";
+  };
+  ref?: {
+    table: string;
+    as: string;
+    to?: string;
+    source?: string;
+  };
   unique?: boolean;
   nullable?: boolean;
   default?: any;
@@ -36,6 +47,21 @@ export class ColumnBuilder {
 
   default(val: any) {
     this.obj.default = val;
+    return this;
+  }
+
+  min(val: number) {
+    this.obj.min = val;
+    return this;
+  }
+
+  max(val: number) {
+    this.obj.max = val;
+    return this;
+  }
+
+  lowercase() {
+    this.obj.lowercase = true;
     return this;
   }
 
@@ -87,9 +113,22 @@ export const types = {
   text: () => new ColumnBuilder("text"),
   jsonb: () => new ColumnBuilder("jsonb"),
   timestamp: () => new ColumnBuilder("timestamp"),
-  ref: (table: string) => {
+  array: (innerType: ColumnBuilder) => {
+    const built = typeof innerType?.build === "function" ? innerType.build() : innerType;
+    const inner = built as ColumnObject;
+    if (!inner || (inner.type !== "string" && inner.type !== "int")) {
+      throw new Error("Kadak Error: array() only supports string or int");
+    }
+    const b = new ColumnBuilder("array");
+    (b as any).obj.array = { type: inner.type as "string" | "int" };
+    return b;
+  },
+  ref: (table: string, opts: { as: string; to?: string }) => {
+    if (!opts?.as) {
+      throw new Error("Kadak Error: 'as' is required in ref()");
+    }
     const b = new ColumnBuilder();
-    (b as any).obj.ref = table;
+    (b as any).obj.ref = { table, as: opts.as, to: opts.to || "id" };
     (b as any).obj.type = "int"; // Refs are integers
     return b;
   },
@@ -115,10 +154,17 @@ function generateColumnSQL(colName: string, rawDef: any, tableName: string, inde
   let typeStr = "";
   let constraints = "";
   let refTable = "";
+  let refTarget = "id";
   let onDelete = "";
 
   // 1. Resolve Type
-  if (def.type === "string") {
+  if (def.array) {
+    if (def.array.type === "string") {
+      typeStr = "TEXT[]";
+    } else if (def.array.type === "int") {
+      typeStr = "INTEGER[]";
+    }
+  } else if (def.type === "string") {
     typeStr = "VARCHAR(255)";
   } else if (def.type === "varchar") {
     typeStr = `VARCHAR(${def.length || 255})`;
@@ -134,7 +180,8 @@ function generateColumnSQL(colName: string, rawDef: any, tableName: string, inde
     refTable = rawDef.split(":")[1];
     typeStr = "INTEGER";
   } else if (def.ref) {
-    refTable = def.ref;
+    refTable = def.ref.table;
+    refTarget = def.ref.to || "id";
     typeStr = "INTEGER";
     onDelete = def.onDelete ? ` ON DELETE ${def.onDelete.toUpperCase()}` : "";
   }
@@ -150,9 +197,13 @@ function generateColumnSQL(colName: string, rawDef: any, tableName: string, inde
     indexStatements.push(`CREATE INDEX IF NOT EXISTS idx_${tableName}_${colName} ON ${tableName}("${colName}");`);
   }
 
+  if (def.min !== undefined || def.max !== undefined || def.lowercase) {
+    // Metadata only for future tooling.
+  }
+
   let fkSQL: string | undefined;
   if (refTable) {
-    fkSQL = `ALTER TABLE ${tableName} ADD CONSTRAINT fk_${tableName}_${colName} FOREIGN KEY ("${colName}") REFERENCES ${refTable}(id)${onDelete}`;
+    fkSQL = `ALTER TABLE ${tableName} ADD CONSTRAINT fk_${tableName}_${colName} FOREIGN KEY ("${colName}") REFERENCES ${refTable}(${refTarget})${onDelete}`;
   }
 
   return { columnSQL: `"${colName}" ${typeStr}${constraints}`, fkSQL };

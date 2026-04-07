@@ -100,18 +100,16 @@ function traverse(parentTableOrAlias, relations, plan, schema) {
   for (const rel of relations) {
     const parentTable = findTable(parentTableOrAlias, plan);
     const target = schema[parentTable]?.[rel.name];
-    if (!target) {
+    if (!target || typeof target !== "object" || !("table" in target)) {
       throw new Error(`Invalid relation: ${rel.name} not found on ${parentTable}`);
     }
-    const [targetTable, targetField] = target.split(".");
-    const alias = rel.name !== targetTable ? rel.name : void 0;
+    const relation = target;
+    const targetTable = relation.table;
+    const targetField = relation.to || "id";
+    const alias = relation.as !== targetTable ? relation.as : void 0;
     const targetIdentifier = alias || targetTable;
     let onCondition;
-    if (targetField === "id") {
-      onCondition = [`${parentTableOrAlias}.${rel.name}id`, `${targetIdentifier}.${targetField}`];
-    } else {
-      onCondition = [`${targetIdentifier}.${targetField}`, `${parentTableOrAlias}.id`];
-    }
+    onCondition = [`${parentTableOrAlias}.${relation.source}`, `${targetIdentifier}.${targetField}`];
     plan.joins.push({
       table: targetTable,
       alias,
@@ -137,6 +135,7 @@ function compileSQL(plan, schema) {
     for (const [field, mapping] of Object.entries(tableSchema)) {
       if (field === "id") continue;
       if (typeof mapping === "string" && mapping.includes(".")) continue;
+      if (typeof mapping === "object" && mapping !== null && "table" in mapping && "as" in mapping) continue;
       selections.push(`${tableId}."${field}" AS "${tableId}__${field}"`);
     }
   };
@@ -152,7 +151,7 @@ function compileSQL(plan, schema) {
       const [table, field] = part.split(".");
       return `${table}."${field}"`;
     });
-    sql += `LEFT JOIN ${join.table}${aliasStr} ON ${onRight} = ${onLeft}
+    sql += `LEFT JOIN ${join.table}${aliasStr} ON ${onLeft} = ${onRight}
 `;
   }
   if (plan.where && plan.where.length > 0) {
@@ -228,7 +227,8 @@ function processRelations(parentTable, parentObj, row, relations, schema) {
   for (const rel of relations) {
     const target = schema[parentTable]?.[rel.name];
     if (!target) continue;
-    const [targetTable, targetField] = target.split(".");
+    const targetTable = target.table;
+    const targetField = target.to;
     const isOneToMany = targetField !== "id";
     const prefix = `${rel.name}__`;
     const relId = row[`${prefix}id`];
@@ -345,8 +345,9 @@ function validateNode(tableName, nodeInput, schema) {
         throw new Error(`\u274C Kadak Error: Relation '${key}' not found on table '${tableName}'. ${suggestions}`);
       }
       if (typeof value === "object" && value !== null) {
-        const [targetTable] = target.split(".");
-        validateNode(targetTable, value, schema);
+        if (typeof target === "object" && target !== null && "table" in target) {
+          validateNode(target.table, value, schema);
+        }
       }
     }
   }
@@ -369,6 +370,18 @@ var ColumnBuilder = class {
   }
   default(val) {
     this.obj.default = val;
+    return this;
+  }
+  min(val) {
+    this.obj.min = val;
+    return this;
+  }
+  max(val) {
+    this.obj.max = val;
+    return this;
+  }
+  lowercase() {
+    this.obj.lowercase = true;
     return this;
   }
   defaultNow() {
@@ -411,9 +424,22 @@ var types = {
   text: () => new ColumnBuilder("text"),
   jsonb: () => new ColumnBuilder("jsonb"),
   timestamp: () => new ColumnBuilder("timestamp"),
-  ref: (table) => {
+  array: (innerType) => {
+    const built = typeof innerType?.build === "function" ? innerType.build() : innerType;
+    const inner = built;
+    if (!inner || inner.type !== "string" && inner.type !== "int") {
+      throw new Error("Kadak Error: array() only supports string or int");
+    }
+    const b = new ColumnBuilder("array");
+    b.obj.array = { type: inner.type };
+    return b;
+  },
+  ref: (table, opts) => {
+    if (!opts?.as) {
+      throw new Error("Kadak Error: 'as' is required in ref()");
+    }
     const b = new ColumnBuilder();
-    b.obj.ref = table;
+    b.obj.ref = { table, as: opts.as, to: opts.to || "id" };
     b.obj.type = "int";
     return b;
   },
@@ -431,8 +457,15 @@ function generateColumnSQL(colName, rawDef, tableName, indexStatements) {
   let typeStr = "";
   let constraints = "";
   let refTable = "";
+  let refTarget = "id";
   let onDelete = "";
-  if (def.type === "string") {
+  if (def.array) {
+    if (def.array.type === "string") {
+      typeStr = "TEXT[]";
+    } else if (def.array.type === "int") {
+      typeStr = "INTEGER[]";
+    }
+  } else if (def.type === "string") {
     typeStr = "VARCHAR(255)";
   } else if (def.type === "varchar") {
     typeStr = `VARCHAR(${def.length || 255})`;
@@ -448,7 +481,8 @@ function generateColumnSQL(colName, rawDef, tableName, indexStatements) {
     refTable = rawDef.split(":")[1];
     typeStr = "INTEGER";
   } else if (def.ref) {
-    refTable = def.ref;
+    refTable = def.ref.table;
+    refTarget = def.ref.to || "id";
     typeStr = "INTEGER";
     onDelete = def.onDelete ? ` ON DELETE ${def.onDelete.toUpperCase()}` : "";
   }
@@ -461,9 +495,11 @@ function generateColumnSQL(colName, rawDef, tableName, indexStatements) {
   if (def.index) {
     indexStatements.push(`CREATE INDEX IF NOT EXISTS idx_${tableName}_${colName} ON ${tableName}("${colName}");`);
   }
+  if (def.min !== void 0 || def.max !== void 0 || def.lowercase) {
+  }
   let fkSQL;
   if (refTable) {
-    fkSQL = `ALTER TABLE ${tableName} ADD CONSTRAINT fk_${tableName}_${colName} FOREIGN KEY ("${colName}") REFERENCES ${refTable}(id)${onDelete}`;
+    fkSQL = `ALTER TABLE ${tableName} ADD CONSTRAINT fk_${tableName}_${colName} FOREIGN KEY ("${colName}") REFERENCES ${refTable}(${refTarget})${onDelete}`;
   }
   return { columnSQL: `"${colName}" ${typeStr}${constraints}`, fkSQL };
 }
@@ -593,12 +629,30 @@ var kadak = ((config) => {
         const columns = table.config.columns;
         _rawDefinition[tableName] = columns;
         _currentSchema[tableName] = {};
+        const relationNames = /* @__PURE__ */ new Set();
         for (const [col, rawDef] of Object.entries(columns)) {
           const def = rawDef instanceof ColumnBuilder ? rawDef.build() : typeof rawDef === "string" ? { type: rawDef } : rawDef;
           if (def.ref) {
-            _currentSchema[tableName][col] = `${def.ref}.id`;
+            const relationName = def.ref.as;
+            if (!relationName) {
+              throw new Error("Kadak Error: 'as' is required in ref()");
+            }
+            if (relationNames.has(relationName)) {
+              throw new Error(`Kadak Error: duplicate relation name '${relationName}'`);
+            }
+            if (columns[relationName] !== void 0) {
+              throw new Error(`Kadak Error: relation name '${relationName}' conflicts with column`);
+            }
+            relationNames.add(relationName);
+            _currentSchema[tableName][col] = def;
+            _currentSchema[tableName][relationName] = {
+              table: def.ref.table,
+              as: relationName,
+              to: def.ref.to || "id",
+              source: col
+            };
           } else if (typeof rawDef === "string" && rawDef.startsWith("ref:")) {
-            _currentSchema[tableName][col] = `${rawDef.split(":")[1]}.id`;
+            throw new Error("Kadak Error: 'as' is required in ref()");
           } else if (typeof rawDef === "string" && rawDef.includes(".")) {
             _currentSchema[tableName][col] = rawDef;
           } else {

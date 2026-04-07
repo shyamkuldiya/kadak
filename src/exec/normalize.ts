@@ -1,5 +1,12 @@
 import { QueryAST, RelationAST } from "../query/ast.js";
 
+type RelationDefinition = {
+  table: string;
+  as: string;
+  to: string;
+  source: string;
+};
+
 /**
  * Normalizes flat SQL rows into a nested object graph based on the AST structure.
  * Groups by 'id' and avoids duplicates.
@@ -43,13 +50,14 @@ function processRelations(
   parentObj: any,
   row: any,
   relations: RelationAST[],
-  schema: Record<string, Record<string, string>>
+  schema: Record<string, Record<string, any>>
 ) {
   for (const rel of relations) {
-    const target = schema[parentTable]?.[rel.name];
+    const target = schema[parentTable]?.[rel.name] as unknown as RelationDefinition | undefined;
     if (!target) continue;
 
-    const [targetTable, targetField] = target.split(".");
+    const targetTable = target.table;
+    const targetField = target.to;
     const isOneToMany = targetField !== "id";
 
     const prefix = `${rel.name}__`;

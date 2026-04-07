@@ -21,6 +21,7 @@ export function compileSQL(plan: Plan, schema: Record<string, Record<string, any
     for (const [field, mapping] of Object.entries(tableSchema)) {
       if (field === "id") continue;
       if (typeof mapping === "string" && mapping.includes(".")) continue;
+      if (typeof mapping === "object" && mapping !== null && "table" in mapping && "as" in mapping) continue;
       // Quote both the field and the alias to preserve case
       selections.push(`${tableId}."${field}" AS "${tableId}__${field}"`);
     }
@@ -42,7 +43,7 @@ export function compileSQL(plan: Plan, schema: Record<string, Record<string, any
       const [table, field] = part.split(".");
       return `${table}."${field}"`;
     });
-    sql += `LEFT JOIN ${join.table}${aliasStr} ON ${onRight} = ${onLeft}\n`;
+    sql += `LEFT JOIN ${join.table}${aliasStr} ON ${onLeft} = ${onRight}\n`;
   }
 
   if (plan.where && plan.where.length > 0) {

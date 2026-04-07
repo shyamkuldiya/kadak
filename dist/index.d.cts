@@ -3,7 +3,18 @@ export { closePool, getTransactionClient, runQuery } from './exec/client.cjs';
 
 type ColumnObject = {
     type?: "string" | "varchar" | "int" | "text" | "jsonb" | "timestamp" | string;
-    ref?: string;
+    min?: number;
+    max?: number;
+    lowercase?: boolean;
+    array?: {
+        type: "string" | "int";
+    };
+    ref?: {
+        table: string;
+        as: string;
+        to?: string;
+        source?: string;
+    };
     unique?: boolean;
     nullable?: boolean;
     default?: any;
@@ -25,6 +36,9 @@ declare class ColumnBuilder {
     private obj;
     constructor(type?: ColumnObject["type"]);
     default(val: any): this;
+    min(val: number): this;
+    max(val: number): this;
+    lowercase(): this;
     defaultNow(): this;
     unique(): this;
     nullable(val?: boolean): this;
@@ -41,7 +55,11 @@ declare const types: {
     text: () => ColumnBuilder;
     jsonb: () => ColumnBuilder;
     timestamp: () => ColumnBuilder;
-    ref: (table: string) => ColumnBuilder;
+    array: (innerType: ColumnBuilder) => ColumnBuilder;
+    ref: (table: string, opts: {
+        as: string;
+        to?: string;
+    }) => ColumnBuilder;
     timestamps: () => {
         createdAt: ColumnObject;
         updatedAt: ColumnObject;
@@ -54,7 +72,11 @@ declare const t: {
     text: () => ColumnBuilder;
     jsonb: () => ColumnBuilder;
     timestamp: () => ColumnBuilder;
-    ref: (table: string) => ColumnBuilder;
+    array: (innerType: ColumnBuilder) => ColumnBuilder;
+    ref: (table: string, opts: {
+        as: string;
+        to?: string;
+    }) => ColumnBuilder;
     timestamps: () => {
         createdAt: ColumnObject;
         updatedAt: ColumnObject;
@@ -92,7 +114,7 @@ type Plan = {
     where?: Predicate[];
     orderBy?: OrderBy;
 };
-declare function buildPlan(ast: QueryAST, schema: Record<string, Record<string, string>>): Plan;
+declare function buildPlan(ast: QueryAST, schema: Record<string, Record<string, any>>): Plan;
 
 type Compiled = {
     text: string;

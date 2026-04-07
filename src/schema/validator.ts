@@ -1,4 +1,4 @@
-export function validateInput(input: Record<string, unknown>, schema: Record<string, Record<string, string>>) {
+export function validateInput(input: Record<string, unknown>, schema: Record<string, Record<string, any>>) {
   if (Object.keys(input).length === 0) {
     throw new Error("❌ Kadak Error: Input cannot be empty. Please provide a table to query.");
   }
@@ -12,7 +12,7 @@ export function validateInput(input: Record<string, unknown>, schema: Record<str
   validateNode(rootTable, input[rootTable] as Record<string, unknown>, schema);
 }
 
-function validateNode(tableName: string, nodeInput: Record<string, unknown>, schema: Record<string, Record<string, string>>) {
+function validateNode(tableName: string, nodeInput: Record<string, unknown>, schema: Record<string, Record<string, any>>) {
   const tableSchema = schema[tableName] || {};
   const validFields = Object.keys(tableSchema);
 
@@ -36,8 +36,9 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
       }
 
       if (typeof value === "object" && value !== null) {
-        const [targetTable] = target.split(".");
-        validateNode(targetTable, value as Record<string, unknown>, schema);
+        if (typeof target === "object" && target !== null && "table" in target) {
+          validateNode((target as any).table, value as Record<string, unknown>, schema);
+        }
       }
     }
   }

@@ -1,5 +1,12 @@
 import { QueryAST, RelationAST, Predicate, OrderBy } from "./ast.js";
 
+type RelationDefinition = {
+  table: string;
+  as: string;
+  to: string;
+  source: string;
+};
+
 export type Plan = {
   from: string;
   joins: Array<{
@@ -11,7 +18,7 @@ export type Plan = {
   orderBy?: OrderBy;
 };
 
-export function buildPlan(ast: QueryAST, schema: Record<string, Record<string, string>>): Plan {
+export function buildPlan(ast: QueryAST, schema: Record<string, Record<string, any>>): Plan {
   const plan: Plan = {
     from: ast.root,
     joins: [],
@@ -27,27 +34,25 @@ function traverse(
   parentTableOrAlias: string, 
   relations: RelationAST[], 
   plan: Plan, 
-  schema: Record<string, Record<string, string>>
+  schema: Record<string, Record<string, any>>
 ) {
   for (const rel of relations) {
     const parentTable = findTable(parentTableOrAlias, plan);
     const target = schema[parentTable]?.[rel.name];
     
-    if (!target) {
+    if (!target || typeof target !== "object" || !("table" in target)) {
       throw new Error(`Invalid relation: ${rel.name} not found on ${parentTable}`);
     }
 
-    const [targetTable, targetField] = target.split(".");
+    const relation = target as RelationDefinition;
+    const targetTable = relation.table;
+    const targetField = relation.to || "id";
     
-    const alias = rel.name !== targetTable ? rel.name : undefined;
+    const alias = relation.as !== targetTable ? relation.as : undefined;
     const targetIdentifier = alias || targetTable;
 
     let onCondition: [string, string];
-    if (targetField === "id") {
-      onCondition = [`${parentTableOrAlias}.${rel.name}id`, `${targetIdentifier}.${targetField}`];
-    } else {
-      onCondition = [`${targetIdentifier}.${targetField}`, `${parentTableOrAlias}.id`];
-    }
+    onCondition = [`${parentTableOrAlias}.${relation.source}`, `${targetIdentifier}.${targetField}`];
 
     plan.joins.push({
       table: targetTable,

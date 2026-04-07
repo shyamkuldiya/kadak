@@ -47,6 +47,15 @@ export type InferredQuery<S> = {
   [K in keyof S]?: TableQuery<S, K>;
 };
 
+type RelationDefinition = {
+  table: string;
+  as: string;
+  to: string;
+  source: string;
+};
+
+type SchemaEntry = string | Record<string, any> | RelationDefinition;
+
 export interface KadakInstance<S extends Record<string, any> = any> {
   readonly schema: Readonly<SchemaDefinition>;
   define<Tables extends Record<string, Table<any, any>>>(tables: Tables): KadakInstance<{
@@ -70,7 +79,7 @@ export interface KadakFactory {
 // ------------------------------
 
 export const kadak = ((config: KadakConfig): KadakInstance<any> => {
-  let _currentSchema: Record<string, Record<string, any>> = {};
+  let _currentSchema: Record<string, Record<string, SchemaEntry>> = {};
   let _rawDefinition: SchemaDefinition = {};
   const _url = config.url;
 
@@ -114,14 +123,32 @@ export const kadak = ((config: KadakConfig): KadakInstance<any> => {
         
         _rawDefinition[tableName] = columns;
         _currentSchema[tableName] = {};
+        const relationNames = new Set<string>();
         
         for (const [col, rawDef] of Object.entries(columns)) {
           const def: ColumnObject = (rawDef instanceof ColumnBuilder) ? (rawDef as any).build() : (typeof rawDef === "string" ? { type: rawDef } : rawDef);
           
           if (def.ref) {
-            _currentSchema[tableName][col] = `${def.ref}.id`;
+            const relationName = def.ref.as;
+            if (!relationName) {
+              throw new Error("Kadak Error: 'as' is required in ref()");
+            }
+            if (relationNames.has(relationName)) {
+              throw new Error(`Kadak Error: duplicate relation name '${relationName}'`);
+            }
+            if (columns[relationName] !== undefined) {
+              throw new Error(`Kadak Error: relation name '${relationName}' conflicts with column`);
+            }
+            relationNames.add(relationName);
+            _currentSchema[tableName][col] = def;
+            _currentSchema[tableName][relationName] = {
+              table: def.ref.table,
+              as: relationName,
+              to: def.ref.to || "id",
+              source: col
+            };
           } else if (typeof rawDef === "string" && rawDef.startsWith("ref:")) {
-            _currentSchema[tableName][col] = `${rawDef.split(":")[1]}.id`;
+            throw new Error("Kadak Error: 'as' is required in ref()");
           } else if (typeof rawDef === "string" && rawDef.includes(".")) {
             _currentSchema[tableName][col] = rawDef;
           } else {

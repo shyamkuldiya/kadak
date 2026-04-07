@@ -1,6 +1,6 @@
 # Kadak
 
-PostgreSQL data runtime with a single explicit entry point.
+PostgreSQL data runtime with one explicit entry point.
 
 ## Install
 
@@ -14,7 +14,7 @@ npm install @shyk/kadak
 2. Export `dbClient` from `kadak.config.ts`.
 3. Import `dbClient` everywhere and use it directly.
 
-## Tables
+## Full Example
 
 `tables/users.ts`
 
@@ -26,37 +26,16 @@ const { types } = kadak
 export const users = kadak.table({
   name: "users",
   columns: {
-    name: types.string().notNull(),
-    email: types.string().unique().notNull(),
+    name: types.string().min(2).max(80).lowercase().unique(),
+    email: types.string().min(3).max(120).unique(),
+    age: types.int().min(0).max(120),
+    tags: types.array(types.string()),
     ...types.timestamps()
   }
 })
 ```
 
-## Config
-
-`kadak.config.ts`
-
-```typescript
-import { kadak } from "@shyk/kadak"
-import { users } from "./tables/users"
-
-const db = kadak({ url: process.env.DATABASE_URL! })
-
-export default db.define({ users })
-```
-
-## Usage
-
-```typescript
-import db from "@/kadak.config"
-
-await db.data({
-  users: true
-})
-```
-
-## Relations
+`tables/posts.ts`
 
 ```typescript
 import { kadak } from "@shyk/kadak"
@@ -66,39 +45,96 @@ const { types } = kadak
 export const posts = kadak.table({
   name: "posts",
   columns: {
-    title: types.string().notNull(),
-    authorId: types.ref("users")
+    title: types.string().min(3).max(120),
+    body: types.string().min(1),
+    tags: types.array(types.string()),
+    authorId: types.ref("users", { as: "author" }),
+    ...types.timestamps()
   }
 })
 ```
 
-Querying relations stays explicit:
+`tables/comments.ts`
 
 ```typescript
-await db.data({
-  posts: {
-    authorId: true
+import { kadak } from "@shyk/kadak"
+
+const { types } = kadak
+
+export const comments = kadak.table({
+  name: "comments",
+  columns: {
+    body: types.string().min(1).max(500),
+    postId: types.ref("posts", { as: "post" }),
+    authorId: types.ref("users", { as: "author" }),
+    ...types.timestamps()
   }
 })
 ```
+
+`kadak.config.ts`
+
+```typescript
+import { kadak } from "@shyk/kadak"
+import { users } from "./tables/users"
+import { posts } from "./tables/posts"
+import { comments } from "./tables/comments"
+
+const db = kadak({ url: process.env.DATABASE_URL! })
+const dbClient = db.define({ users, posts, comments })
+
+export default dbClient
+```
+
+## Usage
+
+```typescript
+import dbClient from "@/kadak.config"
+
+await dbClient.data({
+  posts: {
+    orderBy: { id: "desc" },
+    author: true,
+    comments: true
+  }
+})
+```
+
+## Relations (Explicit)
+
+Use `types.ref("users", { as: "author" })` for schema.
+Query with `author`, not `authorId`.
+Kadak keeps relation names explicit and predictable.
+
+## Metadata vs Constraints
+
+`min`, `max`, and `lowercase` are metadata only.
+`unique`, `notNull`, `default`, and `timestamps()` affect schema.
+`types.array(...)` maps to `TEXT[]` or `INTEGER[]`.
+
+## What Kadak Does Not Do
+
+Kadak does not run runtime validation for `min` / `max` / `lowercase`.
+Kadak does not guess relation names.
+Kadak does not hide the `dbClient` entry point.
 
 ## Mutations
 
 ```typescript
-await db.insert("users", { name: "Alice", email: "alice@example.com" })
+await dbClient.insert("users", { name: "Alice", email: "alice@example.com" })
 
-await db.update("users", {
+await dbClient.update("users", {
   where: { id: 1 },
   data: { name: "Bob" }
 })
 
-await db.delete("users", { where: { id: 1 } })
+await dbClient.delete("users", { where: { id: 1 } })
 ```
 
 ## Debugging
 
 ```typescript
-const q = db.data({ users: true })
+const q = dbClient.data({ posts: true })
 
 console.log(q.toSQL())
 await q.explain()
@@ -111,7 +147,7 @@ console.log(q.trace())
 npx kadak push
 ```
 
-The CLI loads the default export from `kadak.config.ts` and uses it as `dbClient`.
+The CLI loads the default export from `kadak.config.ts` as `dbClient`.
 
 ## License
 
