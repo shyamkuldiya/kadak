@@ -1,30 +1,29 @@
-# Kadak — PostgreSQL Data Runtime
+# Kadak
 
-Kadak is a PostgreSQL-first declarative data runtime that unifies schema definition, query construction, and result normalization into a single object-based language.
+PostgreSQL data runtime with a single explicit entry point.
 
-### Why Kadak?
-Traditional ORMs obscure SQL performance. Kadak provides a lossless mapping where every object corresponds 1:1 to a PostgreSQL capability, ensuring deterministic execution and predictable performance.
-
----
-
-### Install
+## Install
 
 ```bash
 npm install @shyk/kadak
 ```
 
----
+## How Kadak Works
 
-### Quick Example
+1. Define tables in modular files.
+2. Export `dbClient` from `kadak.config.ts`.
+3. Import `dbClient` everywhere and use it directly.
+
+## Tables
+
+`tables/users.ts`
 
 ```typescript
 import { kadak } from "@shyk/kadak"
+
 const { types } = kadak
 
-const db = kadak({ url: process.env.DATABASE_URL })
-
-// 1. Define tables
-const users = kadak.table({
+export const users = kadak.table({
   name: "users",
   columns: {
     name: types.string().notNull(),
@@ -32,84 +31,88 @@ const users = kadak.table({
     ...types.timestamps()
   }
 })
+```
 
-const dbClient = db.define({ users })
+## Config
 
-// 2. Query with nested relations
-const data = await dbClient.data({
-  users: {
-    where: { id: 1 },
-    posts: {
-      comments: true
-    }
+`kadak.config.ts`
+
+```typescript
+import { kadak } from "@shyk/kadak"
+import { users } from "./tables/users"
+
+const db = kadak({ url: process.env.DATABASE_URL! })
+
+export default db.define({ users })
+```
+
+## Usage
+
+```typescript
+import db from "@/kadak.config"
+
+await db.data({
+  users: true
+})
+```
+
+## Relations
+
+```typescript
+import { kadak } from "@shyk/kadak"
+
+const { types } = kadak
+
+export const posts = kadak.table({
+  name: "posts",
+  columns: {
+    title: types.string().notNull(),
+    authorId: types.ref("users")
   }
 })
 ```
 
----
-
-### CLI Usage
-
-Kadak includes a CLI for syncing your schema with the database.
-
-1. Create `kadak.config.ts` in your root:
+Querying relations stays explicit:
 
 ```typescript
-import { kadak } from "@shyk/kadak"
-const { types } = kadak
-
-const users = kadak.table({
-  name: "users",
-  columns: { name: types.string() }
+await db.data({
+  posts: {
+    authorId: true
+  }
 })
-
-export default {
-  url: process.env.DATABASE_URL,
-  schema: { users }
-}
 ```
 
-2. Run the push command:
+## Mutations
+
+```typescript
+await db.insert("users", { name: "Alice", email: "alice@example.com" })
+
+await db.update("users", {
+  where: { id: 1 },
+  data: { name: "Bob" }
+})
+
+await db.delete("users", { where: { id: 1 } })
+```
+
+## Debugging
+
+```typescript
+const q = db.data({ users: true })
+
+console.log(q.toSQL())
+await q.explain()
+console.log(q.trace())
+```
+
+## CLI
 
 ```bash
 npx kadak push
 ```
 
----
+The CLI loads the default export from `kadak.config.ts` and uses it as `dbClient`.
 
-### Mutations
+## License
 
-```typescript
-// Insert
-const user = await dbClient.insert("users", { name: "Alice" })
-
-// Update
-await dbClient.update("users", {
-  where: { id: 1 },
-  data: { name: "Bob" }
-})
-
-// Delete
-await dbClient.delete("users", { where: { id: 1 } })
-```
-
----
-
-### Debugging
-
-```typescript
-const q = dbClient.data({ users: true })
-
-console.log(q.toSQL())  // { sql, values }
-await q.explain()       // EXPLAIN ANALYZE result
-console.log(q.trace())  // Full internal state (AST, Plan, SQL)
-```
-
----
-
-### Status
-**v0.0.1 (Experimental)**  
-Kadak is in early development. The API focuses on core relational mechanics and deterministic execution.
-
-### License
 Apache-2.0
