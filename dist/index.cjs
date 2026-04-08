@@ -478,7 +478,6 @@ function buildExecutionPlan(ast, schema) {
       const relation = getRelation(tableSchema, rel.name);
       if (!relation) continue;
       const childTable = relation.table;
-      const mode = rel._count && !rel.select && rel.relations.length === 0 ? "count" : relation.source === "id" && relation.to === "id" && rel.relations.length === 0 ? "single" : "many";
       edges.push({
         parentTable: tableName,
         relationName: rel.name,
@@ -487,8 +486,7 @@ function buildExecutionPlan(ast, schema) {
         childKey: relation.to || "id",
         select: rel.select,
         _count: rel._count,
-        relations: rel.relations,
-        mode
+        relations: rel.relations
       });
       walk(childTable, rel.relations);
     }
@@ -543,7 +541,7 @@ async function hydratePlan(plan, rows, schema, options, cache) {
           continue;
         }
         progressed = true;
-        if (edge.mode === "count") {
+        if (edge._count && !edge.select && edge.relations.length === 0) {
           const placeholders = values.map((_, idx) => `$${idx + 1}`);
           const sql = `SELECT ${quote(edge.childKey)} AS "__kadak_fk", COUNT(*) AS "__kadak_count" FROM ${edge.childTable} WHERE ${quote(edge.childKey)} IN (${placeholders.join(", ")}) GROUP BY ${quote(edge.childKey)}`;
           const countRows = await runQuery(sql, values, void 0, options.client);
