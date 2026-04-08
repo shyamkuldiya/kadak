@@ -181,7 +181,8 @@ async function hydrateRelations(
   rows: Row[],
   relations: RelationAST[],
   schema: Schema,
-  options: MultiOptions
+  options: MultiOptions,
+  ancestry: string[] = []
 ): Promise<void> {
   const tableSchema = schema[tableName] || {};
   for (const rel of relations) {
@@ -231,7 +232,11 @@ async function hydrateRelations(
       options.client
     );
 
-    await hydrateRelations(relation.table, childRows, rel.relations, schema, options);
+    const nextAncestry = ancestry.concat(tableName);
+    const isCycle = nextAncestry.includes(relation.table);
+    if (!isCycle) {
+      await hydrateRelations(relation.table, childRows, rel.relations, schema, options, nextAncestry);
+    }
 
     if (childKeyField === "id") {
       const childMap = new Map<unknown, Row>();
@@ -287,7 +292,7 @@ export async function executeMultiQuery(
   const { sql, values } = buildMultiRootSql(ast, schema);
   const rows = await runQuery(sql, values, resolvedUrl, options.client) as Row[];
   const rootRows = rows.map((row) => normalizeRoot(row, ast.select));
-  await hydrateRelations(ast.root, rootRows, ast.relations, schema, options);
+  await hydrateRelations(ast.root, rootRows, ast.relations, schema, options, [ast.root]);
   return { rootRows, sql, values };
 }
 

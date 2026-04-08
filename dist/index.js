@@ -419,7 +419,7 @@ function collectValues(rows, field) {
   }
   return Array.from(values);
 }
-async function hydrateRelations(tableName, rows, relations, schema, options) {
+async function hydrateRelations(tableName, rows, relations, schema, options, ancestry = []) {
   const tableSchema = schema[tableName] || {};
   for (const rel of relations) {
     const relation = getRelation(tableSchema, rel.name);
@@ -464,7 +464,11 @@ async function hydrateRelations(tableName, rows, relations, schema, options) {
       void 0,
       options.client
     );
-    await hydrateRelations(relation.table, childRows, rel.relations, schema, options);
+    const nextAncestry = ancestry.concat(tableName);
+    const isCycle = nextAncestry.includes(relation.table);
+    if (!isCycle) {
+      await hydrateRelations(relation.table, childRows, rel.relations, schema, options, nextAncestry);
+    }
     if (childKeyField === "id") {
       const childMap = /* @__PURE__ */ new Map();
       for (const child of childRows) {
@@ -512,7 +516,7 @@ async function executeMultiQuery(ast, schema, options, resolvedUrl) {
   const { sql, values } = buildMultiRootSql(ast, schema);
   const rows = await runQuery(sql, values, resolvedUrl, options.client);
   const rootRows = rows.map((row) => normalizeRoot(row, ast.select));
-  await hydrateRelations(ast.root, rootRows, ast.relations, schema, options);
+  await hydrateRelations(ast.root, rootRows, ast.relations, schema, options, [ast.root]);
   return { rootRows, sql, values };
 }
 function shouldUseMultiQuery(ast, schema) {
