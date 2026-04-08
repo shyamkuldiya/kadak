@@ -110,10 +110,6 @@ function parentKeySet(rows: Row[], field: string) {
   return unique(rows.map((row) => row[field]).filter((value) => value !== null && value !== undefined));
 }
 
-function cyclePath(path: string[], next: string) {
-  return path.includes(next);
-}
-
 type LoadedBucket = {
   byKey: Map<unknown, Row[]>;
   single: Map<unknown, Row | null>;
@@ -223,86 +219,6 @@ function shouldUseMultiQuery(ast: QueryAST, schema: Schema): boolean {
   if (ast._count) return false;
   if (depth(ast.relations) > 1) return true;
   return ast.relations.some((rel) => relationShapeNeedsBatch(rel, schema, ast.root));
-}
-
-async function hydrateLayer(
-  tableName: string,
-  rows: Row[],
-  relations: RelationAST[],
-  schema: Schema,
-  options: MultiOptions,
-  path: string[],
-  cache: Map<CacheKey, Promise<Row[]>>
-) {
-  const tableSchema = schema[tableName] || {};
-  await Promise.all(relations.map(async (rel) => {
-    const relation = getRelation(tableSchema, rel.name);
-    if (!relation) return;
-
-    const nextTable = relation.table;
-    const parentKey = relation.source;
-    const childKey = relation.to || "id";
-    const values = parentKeySet(rows, parentKey);
-    if (values.length === 0) {
-      for (const row of rows) {
-        row[rel.name] = rel._count ? { _count: 0 } : (childKey === "id" ? null : []);
-      }
-      return;
-    }
-
-    if (rel._count && !rel.select && rel.relations.length === 0) {
-      const placeholders = values.map((_, idx) => `$${idx + 1}`);
-      const sql = `SELECT ${quote(childKey)} AS "__kadak_fk", COUNT(*) AS "__kadak_count" FROM ${nextTable} WHERE ${quote(childKey)} IN (${placeholders.join(", ")}) GROUP BY ${quote(childKey)}`;
-      const countRows = await runQuery(sql, values, undefined, options.client) as Row[];
-      const countMap = new Map<unknown, number>();
-      for (const countRow of countRows) {
-        const key = countRow.__kadak_fk;
-        const count = typeof countRow.__kadak_count === "string" ? Number(countRow.__kadak_count) : Number(countRow.__kadak_count ?? 0);
-        countMap.set(key, count);
-      }
-      for (const row of rows) {
-        row[rel.name] = { _count: countMap.get(row[parentKey]) ?? 0 };
-      }
-      return;
-    }
-
-    const childRows = await fetchBatch(nextTable, childKey, values, schema, rel.select, options.client, cache);
-    const nextPath = path.concat(tableName);
-    const cyclic = cyclePath(nextPath, nextTable);
-
-    if (!cyclic && rel.relations.length > 0) {
-      await hydrateLayer(nextTable, childRows, rel.relations, schema, options, nextPath, cache);
-    }
-
-    if (childKey === "id") {
-      const childMap = bucketRows(childRows, childKey, rel.select).single;
-      for (const row of rows) {
-        const child = childMap.get(row[parentKey]) ?? null;
-        row[rel.name] = child ? project(child, rel.select) : null;
-      }
-    } else {
-      const grouped = bucketRows(childRows, childKey, rel.select).byKey;
-      for (const row of rows) {
-        row[rel.name] = (grouped.get(row[parentKey]) || []).map((child) => project(child, rel.select));
-      }
-    }
-
-    if (rel._count) {
-      const countMap = new Map<unknown, number>();
-      for (const [key, bucket] of bucketRows(childRows, childKey, rel.select).byKey.entries()) {
-        countMap.set(key, bucket.length);
-      }
-      for (const row of rows) {
-        const current = row[rel.name];
-        const count = countMap.get(row[parentKey]) ?? 0;
-        if (Array.isArray(current)) {
-          (current as Row[] & { _count?: number })._count = count;
-        } else if (current && typeof current === "object") {
-          (current as Row)._count = count;
-        }
-      }
-    }
-  }));
 }
 
 async function hydratePlan(
