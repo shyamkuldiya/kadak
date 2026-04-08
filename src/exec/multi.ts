@@ -319,13 +319,54 @@ async function hydratePlan(
     list.push(edge);
     groupedEdges.set(edge.parentTable, list);
   }
-  const rootEdges = groupedEdges.get(plan.root) || [];
-  await hydrateLayer(plan.root, rows, rootEdges.map((edge) => ({
-    name: edge.relationName,
-    _count: edge._count,
-    select: edge.select,
-    relations: edge.relations
-  })), schema, options, path, cache);
+
+  const frontier = new Map<string, Row[]>();
+  frontier.set(plan.root, rows);
+
+  const visited = new Set<string>();
+  const maxPasses = Math.max(1, plan.edges.length + 1);
+
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let progressed = false;
+    const currentFrontier = Array.from(frontier.entries());
+    frontier.clear();
+
+    for (const [tableName, tableRows] of currentFrontier) {
+      const edges = groupedEdges.get(tableName) || [];
+      if (edges.length === 0 || tableRows.length === 0) continue;
+
+      for (const edge of edges) {
+        const edgeKey = `${tableName}:${edge.relationName}`;
+        if (visited.has(edgeKey)) continue;
+        visited.add(edgeKey);
+
+        const relationNode: RelationAST = {
+          name: edge.relationName,
+          _count: edge._count,
+          select: edge.select,
+          relations: edge.relations
+        };
+
+        await hydrateLayer(tableName, tableRows, [relationNode], schema, options, path, cache);
+        progressed = true;
+
+        const childRows = tableRows.flatMap((row) => {
+          const child = row[edge.relationName];
+          if (Array.isArray(child)) return child as Row[];
+          if (child && typeof child === "object") return [child as Row];
+          return [];
+        });
+
+        if (childRows.length > 0 && edge.relations.length > 0) {
+          const nextList = frontier.get(edge.childTable) || [];
+          nextList.push(...childRows);
+          frontier.set(edge.childTable, nextList);
+        }
+      }
+    }
+
+    if (!progressed || frontier.size === 0) break;
+  }
 }
 
 export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: MultiOptions, resolvedUrl?: string) {
