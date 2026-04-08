@@ -1,7 +1,7 @@
 import pg from "pg";
 import { QueryAST } from "../query/ast.js";
 import { runQuery } from "./client.js";
-import { buildExecutionPlan, type ExecutionEdge, type ExecutionPlan, type Schema } from "./multi-plan.js";
+import { analyzeQuery, type ExecutionEdge, type ExecutionPlan, type Schema } from "./multi-analysis.js";
 
 type Row = Record<string, unknown>;
 type MultiOptions = { client?: pg.PoolClient; debug?: boolean };
@@ -217,12 +217,12 @@ async function hydratePlan(
   }
 }
 
-export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: MultiOptions, resolvedUrl?: string) {
+export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: MultiOptions, resolvedUrl?: string, plan?: ExecutionPlan) {
   const { sql, values } = buildRootSql(ast, schema);
   const rows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
   const cache = new Map<CacheKey, Promise<Row[]>>();
-  const plan = buildExecutionPlan(ast, schema);
-  await hydratePlan(plan, rows, schema, options, cache);
+  const analysis = plan ?? analyzeQuery(ast, schema).plan;
+  await hydratePlan(analysis, rows, schema, options, cache);
   const select = ast.select;
   if (!select) return { rootRows: rows, sql, values };
   const rootRows = rows.map((row) => {

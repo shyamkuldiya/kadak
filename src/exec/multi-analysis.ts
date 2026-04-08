@@ -3,7 +3,7 @@ import { QueryAST, RelationAST } from "../query/ast.js";
 export type SchemaEntry = string | { table: string; as: string; to: string; source: string } | Record<string, unknown>;
 export type Schema = Record<string, Record<string, SchemaEntry>>;
 
-type ExecutionEdge = {
+export type ExecutionEdge = {
   parentTable: string;
   relationName: string;
   childTable: string;
@@ -14,7 +14,7 @@ type ExecutionEdge = {
   relations: RelationAST[];
 };
 
-type ExecutionPlan = {
+export type ExecutionPlan = {
   root: QueryAST["root"];
   edges: ExecutionEdge[];
 };
@@ -31,6 +31,12 @@ function getRelation(tableSchema: Record<string, SchemaEntry>, relName: string) 
     return { table, as: relName, to: to || "id", source: "id" };
   }
   return undefined;
+}
+
+function relationNeedsBatch(rel: RelationAST, schema: Schema, root: string): boolean {
+  const relation = getRelation(schema[root] || {}, rel.name);
+  if (!relation) return false;
+  return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
 }
 
 function buildExecutionPlan(ast: QueryAST, schema: Schema): ExecutionPlan {
@@ -67,12 +73,9 @@ function shouldUseMultiQuery(ast: QueryAST, schema: Schema): boolean {
   const depth = (relations: RelationAST[]): number => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
   if (ast._count) return false;
   if (depth(ast.relations) > 1) return true;
-  return ast.relations.some((rel) => {
-    const relation = getRelation(schema[ast.root] || {}, rel.name);
-    if (!relation) return false;
-    return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
-  });
+  return ast.relations.some((rel) => relationNeedsBatch(rel, schema, ast.root));
 }
 
-export type { ExecutionEdge, ExecutionPlan };
-export { buildExecutionPlan, shouldUseMultiQuery };
+export function analyzeQuery(ast: QueryAST, schema: Schema) {
+  return { plan: buildExecutionPlan(ast, schema), useMulti: shouldUseMultiQuery(ast, schema) };
+}

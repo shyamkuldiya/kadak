@@ -360,7 +360,7 @@ function processRelations(parentTable, parentObj, row, relations, schema) {
   }
 }
 
-// src/exec/multi-plan.ts
+// src/exec/multi-analysis.ts
 function isRelationEntry(entry) {
   return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
 }
@@ -372,6 +372,11 @@ function getRelation(tableSchema, relName) {
     return { table, as: relName, to: to || "id", source: "id" };
   }
   return void 0;
+}
+function relationNeedsBatch(rel, schema, root) {
+  const relation = getRelation(schema[root] || {}, rel.name);
+  if (!relation) return false;
+  return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
 }
 function buildExecutionPlan(ast, schema) {
   const edges = [];
@@ -404,11 +409,10 @@ function shouldUseMultiQuery(ast, schema) {
   const depth = (relations) => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
   if (ast._count) return false;
   if (depth(ast.relations) > 1) return true;
-  return ast.relations.some((rel) => {
-    const relation = getRelation(schema[ast.root] || {}, rel.name);
-    if (!relation) return false;
-    return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
-  });
+  return ast.relations.some((rel) => relationNeedsBatch(rel, schema, ast.root));
+}
+function analyzeQuery(ast, schema) {
+  return { plan: buildExecutionPlan(ast, schema), useMulti: shouldUseMultiQuery(ast, schema) };
 }
 
 // src/exec/multi.ts
@@ -575,12 +579,12 @@ async function hydratePlan(plan, rows, schema, options, cache) {
     if (!progressed || frontier.size === 0) break;
   }
 }
-async function executeMultiQuery(ast, schema, options, resolvedUrl) {
+async function executeMultiQuery(ast, schema, options, resolvedUrl, plan) {
   const { sql, values } = buildRootSql(ast, schema);
   const rows = await runQuery(sql, values, resolvedUrl, options.client);
   const cache = /* @__PURE__ */ new Map();
-  const plan = buildExecutionPlan(ast, schema);
-  await hydratePlan(plan, rows, schema, options, cache);
+  const analysis = plan ?? analyzeQuery(ast, schema).plan;
+  await hydratePlan(analysis, rows, schema, options, cache);
   const select = ast.select;
   if (!select) return { rootRows: rows, sql, values };
   const rootRows = rows.map((row) => {
@@ -988,12 +992,12 @@ var kadak = ((config) => {
     const ast = buildAST(input);
     const plan = buildPlan(ast, _currentSchema);
     const { text: sql, values } = compileSQL(plan, ast, _currentSchema);
-    const useMulti = shouldUseMultiQuery(ast, _currentSchema);
+    const analysis = analyzeQuery(ast, _currentSchema);
     const execution = async () => {
       let rows = [];
       try {
-        if (useMulti) {
-          const multi = await executeMultiQuery(ast, _currentSchema, options, resolvedUrl);
+        if (analysis.useMulti) {
+          const multi = await executeMultiQuery(ast, _currentSchema, options, resolvedUrl, analysis.plan);
           rows = multi.rootRows;
           if (options.debug) {
             return { sql: multi.sql, values: multi.values, rows, data: multi.rootRows };
