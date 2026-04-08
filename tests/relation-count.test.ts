@@ -110,4 +110,35 @@ describe("relation count support", () => {
       }
     })).toThrow("Kadak Error: _count cannot be combined with fields or nested relations");
   });
+
+  it("supports custom foreign key names from schema mapping", () => {
+    const db2 = kadak({ url: "postgres://localhost:5432/mock" });
+    const users = kadak.table({
+      name: "users",
+      columns: {
+        name: "string",
+        posts: "posts.authorRef"
+      }
+    });
+    const posts2 = kadak.table({
+      name: "posts",
+      columns: {
+        title: "string",
+        authorRef: kadak.types.ref("users", { as: "author" })
+      }
+    });
+    const client = db2.define({ users, posts: posts2 });
+
+    const q = client.data({
+      users: {
+        posts: {
+          _count: true
+        }
+      }
+    });
+
+    const sql = q.toSQL().sql;
+    expect(sql).toContain('WHERE posts."authorRef" = users."id"');
+    expect(sql).not.toContain('post_id');
+  });
 });
