@@ -11,6 +11,7 @@ type SchemaEntry = string | { table: string; as: string; to: string; source: str
 export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Record<string, SchemaEntry>>): Compiled {
   const values: unknown[] = [];
   const selections: string[] = [];
+  const countJoins: string[] = [];
 
   if (ast._count) {
     let sql = `SELECT COUNT(*) AS "_count" FROM ${plan.from}\n`;
@@ -56,11 +57,13 @@ export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Rec
         : (mapping as { table: string; as: string; to: string; source: string });
       const alias = relation.as !== relation.table ? relation.as : undefined;
       if (rel._count) {
-        selections.push(`(
-    SELECT COUNT(*)
+        const countAlias = `${rel.name}__count_join`;
+        countJoins.push(`LEFT JOIN (
+    SELECT "${relation.to}" AS "__kadak_fk", COUNT(*) AS "__kadak_count"
     FROM ${relation.table}
-    WHERE ${relation.table}."${relation.to}" = ${plan.from}."${relation.source}"
-  ) AS "${rel.name}__count"`);
+    GROUP BY "${relation.to}"
+  ) ${countAlias} ON ${countAlias}."__kadak_fk" = ${plan.from}."${relation.source}"`);
+        selections.push(`COALESCE(${countAlias}."__kadak_count", 0) AS "${rel.name}__count"`);
         continue;
       }
       addTableColumns(relation.table, alias, rel.select);
@@ -73,6 +76,10 @@ export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Rec
   walkRelations(plan.from, ast.relations);
 
   let sql = `SELECT ${selections.join(", ")} FROM ${plan.from}\n`;
+
+  for (const join of countJoins) {
+    sql += `${join}\n`;
+  }
 
   for (const join of plan.joins) {
     const rootRelation = ast.relations.find((rel) => rel.name === (join.alias || join.table));

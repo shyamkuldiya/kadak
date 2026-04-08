@@ -31,10 +31,10 @@ describe("relation count support", () => {
 
     const sql = q.toSQL().sql;
     expect(sql).toContain('SELECT posts.id AS "posts__id"');
-    expect(sql).toContain('SELECT COUNT(*)');
-    expect(sql).toContain('FROM comments');
-    expect(sql).toContain('WHERE comments."post_id" = posts."id"');
-    expect(sql).not.toContain("LEFT JOIN comments");
+    expect(sql).toContain('LEFT JOIN (');
+    expect(sql).toContain('SELECT "post_id" AS "__kadak_fk", COUNT(*) AS "__kadak_count"');
+    expect(sql).toContain('COALESCE(comments__count_join."__kadak_count", 0) AS "comments__count"');
+    expect(sql).not.toContain('LEFT JOIN comments ON');
   });
 
   it("normalizes relation count into nested object", () => {
@@ -138,7 +138,8 @@ describe("relation count support", () => {
     });
 
     const sql = q.toSQL().sql;
-    expect(sql).toContain('WHERE posts."authorRef" = users."id"');
+    expect(sql).toContain('SELECT "authorRef" AS "__kadak_fk", COUNT(*) AS "__kadak_count"');
+    expect(sql).toContain('posts__count_join ON posts__count_join."__kadak_fk" = users."id"');
     expect(sql).not.toContain('post_id');
   });
 });

@@ -164,6 +164,7 @@ function findTable(id, plan) {
 function compileSQL(plan, ast, schema) {
   const values = [];
   const selections = [];
+  const countJoins = [];
   if (ast._count) {
     let sql2 = `SELECT COUNT(*) AS "_count" FROM ${plan.from}
 `;
@@ -202,11 +203,13 @@ function compileSQL(plan, ast, schema) {
       const relation = typeof mapping === "string" ? { table: mapping.split(".")[0], as: rel.name, to: mapping.split(".")[1] || "id", source: "id" } : mapping;
       const alias = relation.as !== relation.table ? relation.as : void 0;
       if (rel._count) {
-        selections.push(`(
-    SELECT COUNT(*)
+        const countAlias = `${rel.name}__count_join`;
+        countJoins.push(`LEFT JOIN (
+    SELECT "${relation.to}" AS "__kadak_fk", COUNT(*) AS "__kadak_count"
     FROM ${relation.table}
-    WHERE ${relation.table}."${relation.to}" = ${plan.from}."${relation.source}"
-  ) AS "${rel.name}__count"`);
+    GROUP BY "${relation.to}"
+  ) ${countAlias} ON ${countAlias}."__kadak_fk" = ${plan.from}."${relation.source}"`);
+        selections.push(`COALESCE(${countAlias}."__kadak_count", 0) AS "${rel.name}__count"`);
         continue;
       }
       addTableColumns(relation.table, alias, rel.select);
@@ -217,6 +220,10 @@ function compileSQL(plan, ast, schema) {
   walkRelations(plan.from, ast.relations);
   let sql = `SELECT ${selections.join(", ")} FROM ${plan.from}
 `;
+  for (const join of countJoins) {
+    sql += `${join}
+`;
+  }
   for (const join of plan.joins) {
     const rootRelation = ast.relations.find((rel) => rel.name === (join.alias || join.table));
     if (rootRelation && rootRelation._count) {
