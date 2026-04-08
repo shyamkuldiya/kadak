@@ -313,6 +313,213 @@ function processRelations(parentTable, parentObj, row, relations, schema) {
   }
 }
 
+// src/exec/multi.ts
+function isRelationEntry(entry) {
+  return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
+}
+function getBaseFields(tableSchema) {
+  return Object.keys(tableSchema).filter((field) => {
+    const mapping = tableSchema[field];
+    if (field === "id") return false;
+    if (typeof mapping === "string" && mapping.includes(".")) return false;
+    return !isRelationEntry(mapping);
+  });
+}
+function quote(field) {
+  return `"${field}"`;
+}
+function buildSelectSql(tableName, selectFields, whereField, whereValues, orderBy, take, skip) {
+  const fields = Array.from(/* @__PURE__ */ new Set(["id", ...selectFields]));
+  const values = [];
+  const sqlFields = fields.map((field) => `${quote(field)}`);
+  let sql = `SELECT ${sqlFields.join(", ")} FROM ${tableName}`;
+  if (whereField && whereValues && whereValues.length > 0) {
+    const placeholders = whereValues.map((_, idx) => {
+      values.push(whereValues[idx]);
+      return `$${idx + 1}`;
+    });
+    sql += ` WHERE ${quote(whereField)} IN (${placeholders.join(", ")})`;
+  }
+  if (orderBy) {
+    sql += ` ORDER BY ${quote(orderBy.field)} ${orderBy.direction.toUpperCase()}`;
+  }
+  if (take !== void 0) {
+    sql += ` LIMIT ${take}`;
+  }
+  if (skip !== void 0) {
+    sql += ` OFFSET ${skip}`;
+  }
+  return { sql, values };
+}
+function buildCountSql(tableName, countField, whereField, whereValues) {
+  const values = [];
+  const placeholders = whereValues.map((value, idx) => {
+    values.push(value);
+    return `$${idx + 1}`;
+  });
+  const sql = `SELECT ${quote(countField)} AS "__kadak_fk", COUNT(*) AS "__kadak_count" FROM ${tableName} WHERE ${quote(countField)} IN (${placeholders.join(", ")}) GROUP BY ${quote(countField)}`;
+  return { sql, values };
+}
+function buildMultiRootSql(ast, schema) {
+  const rootSchema = schema[ast.root] || {};
+  const rootFields = ast.select ? Object.keys(ast.select).filter((f) => f !== "id") : getBaseFields(rootSchema);
+  return buildSelectSql(ast.root, rootFields, void 0, void 0, ast.orderBy, ast.take, ast.skip);
+}
+function getRelation(tableSchema, relName) {
+  const entry = tableSchema[relName];
+  if (isRelationEntry(entry)) return entry;
+  if (typeof entry === "string" && entry.includes(".")) {
+    const [table, to] = entry.split(".");
+    return { table, as: relName, to: to || "id", source: "id" };
+  }
+  return void 0;
+}
+function shouldSelectId(select) {
+  return !select || !!select.id;
+}
+function maxDepth(relations) {
+  let depth = 0;
+  for (const rel of relations) {
+    depth = Math.max(depth, 1 + maxDepth(rel.relations));
+  }
+  return depth;
+}
+function hasReverseRelation(tableName, relations, schema) {
+  const tableSchema = schema[tableName] || {};
+  for (const rel of relations) {
+    const mapping = getRelation(tableSchema, rel.name);
+    if (!mapping) continue;
+    if (mapping.source === "id" && mapping.to !== "id") return true;
+    if (hasReverseRelation(mapping.table, rel.relations, schema)) return true;
+  }
+  return false;
+}
+function normalizeRoot(row, select) {
+  const out = {};
+  if (row.id !== void 0 && shouldSelectId(select)) out.id = row.id;
+  for (const [key, value] of Object.entries(row)) {
+    if (key === "id") continue;
+    if (!select || select[key]) out[key] = value;
+  }
+  return out;
+}
+async function fetchMany(tableName, schema, whereField, whereValues, select, orderBy, take, skip, client) {
+  const tableSchema = schema[tableName] || {};
+  const baseFields = getBaseFields(tableSchema);
+  const selectedFields = select ? Object.keys(select).filter((f) => f !== "id") : baseFields;
+  const { sql, values } = buildSelectSql(tableName, selectedFields, whereField, whereValues, orderBy, take, skip);
+  const rows = await runQuery(sql, values, void 0, client);
+  return rows.map((row) => normalizeRoot(row, select));
+}
+function collectValues(rows, field) {
+  const values = /* @__PURE__ */ new Set();
+  for (const row of rows) {
+    const value = row[field];
+    if (value !== null && value !== void 0) values.add(value);
+  }
+  return Array.from(values);
+}
+async function hydrateRelations(tableName, rows, relations, schema, options) {
+  const tableSchema = schema[tableName] || {};
+  for (const rel of relations) {
+    const relation = getRelation(tableSchema, rel.name);
+    if (!relation || rows.length === 0) continue;
+    const parentKeyField = relation.source;
+    const childKeyField = relation.to || "id";
+    const parentValues = collectValues(rows, parentKeyField);
+    if (parentValues.length === 0) {
+      for (const row of rows) {
+        if (rel._count) {
+          row[rel.name] = { _count: 0 };
+        } else if (childKeyField === "id") {
+          row[rel.name] = null;
+        } else {
+          row[rel.name] = [];
+        }
+      }
+      continue;
+    }
+    if (rel._count && !rel.select && rel.relations.length === 0) {
+      const { sql, values } = buildCountSql(relation.table, childKeyField, parentKeyField, parentValues);
+      const countRows = await runQuery(sql, values, void 0, options.client);
+      const countMap = /* @__PURE__ */ new Map();
+      for (const row of countRows) {
+        const key = row.__kadak_fk;
+        const raw = row.__kadak_count;
+        countMap.set(key, typeof raw === "string" ? Number(raw) : Number(raw ?? 0));
+      }
+      for (const row of rows) {
+        row[rel.name] = { _count: countMap.get(row[parentKeyField]) ?? 0 };
+      }
+      continue;
+    }
+    const childRows = await fetchMany(
+      relation.table,
+      schema,
+      childKeyField,
+      parentValues,
+      rel.select,
+      void 0,
+      void 0,
+      void 0,
+      options.client
+    );
+    await hydrateRelations(relation.table, childRows, rel.relations, schema, options);
+    if (childKeyField === "id") {
+      const childMap = /* @__PURE__ */ new Map();
+      for (const child of childRows) {
+        if (child.id !== void 0) childMap.set(child.id, child);
+      }
+      for (const row of rows) {
+        row[rel.name] = childMap.get(row[parentKeyField]) ?? null;
+      }
+    } else {
+      const groups = /* @__PURE__ */ new Map();
+      for (const child of childRows) {
+        const key = child[childKeyField];
+        if (key === null || key === void 0) continue;
+        const bucket = groups.get(key) || [];
+        bucket.push(child);
+        groups.set(key, bucket);
+      }
+      for (const row of rows) {
+        row[rel.name] = groups.get(row[parentKeyField]) || [];
+      }
+    }
+    if (rel._count) {
+      const countValues = /* @__PURE__ */ new Set();
+      for (const child of childRows) {
+        const key = child[childKeyField];
+        if (key !== null && key !== void 0) countValues.add(key);
+      }
+      const countMap = /* @__PURE__ */ new Map();
+      for (const key of countValues) {
+        const bucket = childRows.filter((row) => row[childKeyField] === key);
+        countMap.set(key, bucket.length);
+      }
+      for (const row of rows) {
+        const current = row[rel.name];
+        if (Array.isArray(current)) {
+          current._count = countMap.get(row[parentKeyField]) ?? 0;
+        } else if (current && typeof current === "object") {
+          current._count = countMap.get(row[parentKeyField]) ?? 0;
+        }
+      }
+    }
+  }
+}
+async function executeMultiQuery(ast, schema, options, resolvedUrl) {
+  const { sql, values } = buildMultiRootSql(ast, schema);
+  const rows = await runQuery(sql, values, resolvedUrl, options.client);
+  const rootRows = rows.map((row) => normalizeRoot(row, ast.select));
+  await hydrateRelations(ast.root, rootRows, ast.relations, schema, options);
+  return { rootRows, sql, values };
+}
+function shouldUseMultiQuery(ast, schema) {
+  if (ast._count) return false;
+  return maxDepth(ast.relations) > 1 || hasReverseRelation(ast.root, ast.relations, schema);
+}
+
 // src/exec/mutations.ts
 function buildInsertSQL(table, data) {
   const fields = [];
@@ -698,9 +905,18 @@ var kadak = ((config) => {
     const ast = buildAST(input);
     const plan = buildPlan(ast, _currentSchema);
     const { text: sql, values } = compileSQL(plan, ast, _currentSchema);
+    const useMulti = shouldUseMultiQuery(ast, _currentSchema);
     const execution = async () => {
       let rows = [];
       try {
+        if (useMulti) {
+          const multi = await executeMultiQuery(ast, _currentSchema, options, resolvedUrl);
+          rows = multi.rootRows;
+          if (options.debug) {
+            return { sql: multi.sql, values: multi.values, rows, data: multi.rootRows };
+          }
+          return multi.rootRows;
+        }
         rows = await runQuery(sql, values, resolvedUrl, options.client);
       } catch (e) {
         if (options.debug) console.error("\u274C Kadak Execution Error:", e.message);

@@ -5,9 +5,10 @@ import { runQuery } from "../src/exec/client.js";
 const DB_URL = process.env.DATABASE_URL;
 const canRun = Boolean(DB_URL);
 
-const suite = canRun ? describe : describe.skip;
-
-suite("query benchmark", () => {
+if (!canRun) {
+  describe.skip("query benchmark", () => {});
+} else {
+describe("query benchmark", () => {
   const db = kadak({ url: DB_URL! });
   const users = kadak.table({
     name: "users",
@@ -61,3 +62,4 @@ suite("query benchmark", () => {
     expect(Number.isFinite(improvement)).toBe(true);
   }, 120000);
 });
+}

@@ -3,6 +3,7 @@ import { buildPlan } from "./query/planner.js";
 import { compileSQL } from "./query/compiler.js";
 import { runQuery, closePool, getTransactionClient } from "./exec/client.js";
 import { normalize } from "./exec/normalize.js";
+import { executeMultiQuery, shouldUseMultiQuery } from "./exec/multi.js";
 import { buildInsertSQL, buildUpdateSQL, buildDeleteSQL } from "./exec/mutations.js";
 import { validateInput } from "./schema/validator.js";
 import { pushSchema, Table, TableConfig, SchemaDefinition, ColumnObject, ColumnBuilder, Column, InferColumns, types } from "./schema/migrator.js";
@@ -189,10 +190,19 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
     const ast = buildAST(input);
     const plan = buildPlan(ast, _currentSchema);
     const { text: sql, values } = compileSQL(plan, ast, _currentSchema);
+    const useMulti = shouldUseMultiQuery(ast, _currentSchema);
     
     const execution = async () => {
       let rows: Array<Record<string, unknown>> = [];
       try {
+        if (useMulti) {
+          const multi = await executeMultiQuery(ast, _currentSchema, options, resolvedUrl);
+          rows = multi.rootRows;
+          if (options.debug) {
+            return { sql: multi.sql, values: multi.values, rows, data: multi.rootRows };
+          }
+          return multi.rootRows;
+        }
         rows = await runQuery(sql, values, resolvedUrl, options.client) as Array<Record<string, unknown>>;
       } catch (e) {
         if (options.debug) console.error("❌ Kadak Execution Error:", (e as Error).message);

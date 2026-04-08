@@ -5,17 +5,17 @@ import { runQuery } from "../src/exec/client.js";
 const DB_URL = process.env.DATABASE_URL || "postgres://localhost:5432/mock";
 const canRun = Boolean(process.env.DATABASE_URL);
 
-const suite = canRun ? describe : describe.skip;
-
-suite("stress and edge-case coverage", () => {
+if (!canRun) {
+  describe.skip("stress and edge-case coverage", () => {});
+} else {
+describe("stress and edge-case coverage", () => {
   const db = kadak({ url: DB_URL });
 
   const users = kadak.table({
     name: "users",
     columns: {
       name: "string",
-      email: "string",
-      posts: "posts.authorId"
+      email: "string"
     }
   });
 
@@ -24,7 +24,7 @@ suite("stress and edge-case coverage", () => {
     columns: {
       title: "string",
       body: "text",
-      authorId: kadak.types.ref("users", { as: "author" }),
+      authorId: kadak.types.ref("users", { as: "author", backRef: "posts" }),
       comments: "comments.postId"
     }
   });
@@ -33,7 +33,7 @@ suite("stress and edge-case coverage", () => {
     name: "comments",
     columns: {
       content: "text",
-      postId: kadak.types.ref("posts", { as: "post" }),
+      postId: kadak.types.ref("posts", { as: "post", backRef: "comments" }),
       authorId: kadak.types.ref("users", { as: "author" })
     }
   });
@@ -110,6 +110,48 @@ suite("stress and edge-case coverage", () => {
     const withComments = result.find((row) => Array.isArray(row.comments) && row.comments.length > 0);
     expect(withComments).toBeTruthy();
     expect(withComments?.comments[0]).toHaveProperty("author");
+  }, 120000);
+
+  it("supports reverse-only traversal users -> posts", async () => {
+    const result = await dbClient.data({
+      users: {
+        posts: true
+      }
+    });
+
+    expect(result.length).toBe(userIds.length);
+    expect(result.every((row) => Array.isArray(row.posts))).toBe(true);
+    expect(result.some((row) => row.posts.length === 0)).toBe(true);
+    expect(new Set(result.map((row) => row.id)).size).toBe(result.length);
+  }, 120000);
+
+  it("supports deep reverse traversal users -> posts -> comments", async () => {
+    const result = await dbClient.data({
+      users: {
+        posts: {
+          comments: true
+        }
+      }
+    });
+
+    expect(result.length).toBe(userIds.length);
+    expect(result.some((row) => row.posts.some((post) => Array.isArray(post.comments)))).toBe(true);
+    expect(result.every((row) => Array.isArray(row.posts))).toBe(true);
+    expect(new Set(result.map((row) => row.id)).size).toBe(result.length);
+  }, 120000);
+
+  it("supports mixed reverse and forward traversal posts -> author -> posts", async () => {
+    const result = await dbClient.data({
+      posts: {
+        author: {
+          posts: true
+        }
+      }
+    });
+
+    expect(result.length).toBe(postIds.length);
+    expect(result.every((row) => row.author && Array.isArray(row.author.posts))).toBe(true);
+    expect(new Set(result.map((row) => row.id)).size).toBe(result.length);
   }, 120000);
 
   it("handles empty relations and null authors", async () => {
@@ -227,7 +269,8 @@ suite("stress and edge-case coverage", () => {
       { select: { title: true } },
       { comments: { _count: true } },
       { author: { select: { id: true } } },
-      { select: { title: true }, comments: { _count: true }, author: { select: { id: true } } }
+      { select: { title: true }, comments: { _count: true }, author: { select: { id: true } } },
+      { posts: true }
     ];
 
     for (const shape of shapes) {
@@ -236,4 +279,33 @@ suite("stress and edge-case coverage", () => {
       expect(result.length).toBeGreaterThan(0);
     }
   }, 120000);
+
+  it("runs parallel load batches and tracks memory", async () => {
+    const before = process.memoryUsage().heapUsed;
+    const started = performance.now();
+
+    const batches = Array.from({ length: 10 }, (_, i) =>
+      dbClient.data({
+        posts: {
+          where: { id: postIds[i] },
+          comments: {
+            _count: true
+          },
+          author: {
+            posts: true
+          }
+        }
+      })
+    );
+
+    const results = await Promise.all(batches);
+    const elapsed = performance.now() - started;
+    const after = process.memoryUsage().heapUsed;
+
+    expect(results.length).toBe(10);
+    expect(elapsed).toBeGreaterThan(0);
+    expect(after - before).toBeGreaterThanOrEqual(0);
+    console.log(`[Kadak Stress] latency=${elapsed.toFixed(2)}ms maxLatency=${elapsed.toFixed(2)}ms heapDelta=${((after - before) / 1024 / 1024).toFixed(2)}MB`);
+  }, 120000);
 });
+}
