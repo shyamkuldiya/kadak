@@ -113,8 +113,28 @@ function buildRootSql(ast: QueryAST, schema: RuntimeSchema) {
   return { sql, values };
 }
 
-function astKey(ast: QueryAST) {
-  return JSON.stringify(ast);
+function shapeKey(ast: QueryAST) {
+  const walk = (relations: RelationAST[]): unknown =>
+    relations
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((rel) => ({
+        name: rel.name,
+        count: !!rel._count,
+        select: rel.select ? Object.keys(rel.select).sort() : [],
+        relations: walk(rel.relations),
+      }));
+
+  return JSON.stringify({
+    root: ast.root,
+    count: !!ast._count,
+    select: ast.select ? Object.keys(ast.select).sort() : [],
+    where: ast.where ? ast.where.map((predicate) => predicate.field).sort() : [],
+    orderBy: ast.orderBy ? { field: ast.orderBy.field, direction: ast.orderBy.direction } : null,
+    take: ast.take !== undefined,
+    skip: ast.skip !== undefined,
+    relations: walk(ast.relations),
+  });
 }
 
 function collectEdges(astRoot: string, relations: RelationAST[], schema: RuntimeSchema) {
@@ -145,8 +165,8 @@ function collectEdges(astRoot: string, relations: RelationAST[], schema: Runtime
   return edges;
 }
 
-function prepareExecution(ast: QueryAST, schema: RuntimeSchema): PreparedPlan {
-  const cacheKey = `${schemaSignature(schema)}::${astKey(ast)}`;
+function prepareExecution(ast: QueryAST, schema: RuntimeSchema, schemaSignatureValue: string): PreparedPlan {
+  const cacheKey = `${schemaSignatureValue}::${shapeKey(ast)}`;
   const cached = planCache.get(cacheKey);
   if (cached) return cached;
 
@@ -168,13 +188,6 @@ function prepareExecution(ast: QueryAST, schema: RuntimeSchema): PreparedPlan {
   }
   planCache.set(cacheKey, prepared);
   return prepared;
-}
-
-function schemaSignature(schema: RuntimeSchema) {
-  return Object.entries(schema)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([table, value]) => `${table}:${value.fields.slice().sort().join(",")}|${Object.entries(value.relations).sort(([a], [b]) => a.localeCompare(b)).map(([name, rel]) => `${name}>${rel.table}.${rel.source}.${rel.to}`).join(",")}`)
-    .join("||");
 }
 
 function parentKeys(rows: Row[], field: string) {
@@ -233,8 +246,8 @@ async function fetchMany(
   return await query;
 }
 
-export async function executeEngine(ast: QueryAST, schema: RuntimeSchema, options: EngineOptions, resolvedUrl?: string) {
-  const plan = prepareExecution(ast, schema);
+export async function executeEngine(ast: QueryAST, schema: RuntimeSchema, options: EngineOptions, resolvedUrl?: string, schemaSignatureValue = "") {
+  const plan = prepareExecution(ast, schema, schemaSignatureValue);
   const { sql, values } = plan;
   const rootRows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
 

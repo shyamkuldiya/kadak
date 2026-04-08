@@ -374,8 +374,23 @@ function buildRootSql(ast, schema) {
   if (ast.skip !== void 0) sql += ` OFFSET ${ast.skip}`;
   return { sql, values };
 }
-function astKey(ast) {
-  return JSON.stringify(ast);
+function shapeKey(ast) {
+  const walk = (relations) => relations.slice().sort((a, b) => a.name.localeCompare(b.name)).map((rel) => ({
+    name: rel.name,
+    count: !!rel._count,
+    select: rel.select ? Object.keys(rel.select).sort() : [],
+    relations: walk(rel.relations)
+  }));
+  return JSON.stringify({
+    root: ast.root,
+    count: !!ast._count,
+    select: ast.select ? Object.keys(ast.select).sort() : [],
+    where: ast.where ? ast.where.map((predicate) => predicate.field).sort() : [],
+    orderBy: ast.orderBy ? { field: ast.orderBy.field, direction: ast.orderBy.direction } : null,
+    take: ast.take !== void 0,
+    skip: ast.skip !== void 0,
+    relations: walk(ast.relations)
+  });
 }
 function collectEdges(astRoot, relations, schema) {
   const edges = [];
@@ -401,8 +416,8 @@ function collectEdges(astRoot, relations, schema) {
   }
   return edges;
 }
-function prepareExecution(ast, schema) {
-  const cacheKey = `${schemaSignature(schema)}::${astKey(ast)}`;
+function prepareExecution(ast, schema, schemaSignatureValue) {
+  const cacheKey = `${schemaSignatureValue}::${shapeKey(ast)}`;
   const cached = planCache.get(cacheKey);
   if (cached) return cached;
   const root = buildRootSql(ast, schema);
@@ -419,9 +434,6 @@ function prepareExecution(ast, schema) {
   }
   planCache.set(cacheKey, prepared);
   return prepared;
-}
-function schemaSignature(schema) {
-  return Object.entries(schema).sort(([a], [b]) => a.localeCompare(b)).map(([table, value]) => `${table}:${value.fields.slice().sort().join(",")}|${Object.entries(value.relations).sort(([a], [b]) => a.localeCompare(b)).map(([name, rel]) => `${name}>${rel.table}.${rel.source}.${rel.to}`).join(",")}`).join("||");
 }
 function parentKeys(rows, field) {
   return unique(rows.map((row) => row[field]).filter((value) => value !== null && value !== void 0));
@@ -467,8 +479,8 @@ async function fetchMany(table, field, values, schema, select, client, cache) {
   cache?.set(key, query);
   return await query;
 }
-async function executeEngine(ast, schema, options, resolvedUrl) {
-  const plan = prepareExecution(ast, schema);
+async function executeEngine(ast, schema, options, resolvedUrl, schemaSignatureValue = "") {
+  const plan = prepareExecution(ast, schema, schemaSignatureValue);
   const { sql, values } = plan;
   const rootRows = await runQuery(sql, values, resolvedUrl, options.client);
   if (ast._count) {
@@ -981,7 +993,7 @@ var kadak = ((config) => {
     };
     const execution = async () => {
       try {
-        const engine = await executeEngine(ast, _runtimeSchema.tables, options, resolvedUrl);
+        const engine = await executeEngine(ast, _runtimeSchema.tables, options, resolvedUrl, _runtimeSchema.signature);
         if (options.debug) {
           const trace = getTrace();
           return { sql: trace.sql, values: trace.values, rows: engine.rootRows, data: engine.rootRows };

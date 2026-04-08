@@ -201,7 +201,7 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
     
     const execution = async () => {
       try {
-        const engine = await executeEngine(ast, _runtimeSchema.tables, options, resolvedUrl);
+        const engine = await executeEngine(ast, _runtimeSchema.tables, options, resolvedUrl, _runtimeSchema.signature);
         if (options.debug) {
           const trace = getTrace();
           return { sql: trace.sql, values: trace.values, rows: engine.rootRows, data: engine.rootRows };
