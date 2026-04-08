@@ -216,20 +216,6 @@ async function hydratePlan(
   const visited = new Set<string>();
   const maxPasses = Math.max(1, plan.edges.length + 1);
 
-  const assignCount = (tableRows: Row[], relationName: string, parentKey: string, countMap: Map<unknown, number>) => {
-    for (const row of tableRows) {
-      const count = countMap.get(row[parentKey]) ?? 0;
-      const current = row[relationName];
-      if (Array.isArray(current)) {
-        (current as Row[] & { _count?: number })._count = count;
-      } else if (current && typeof current === "object") {
-        (current as Row)._count = count;
-      } else {
-        row[relationName] = { _count: count };
-      }
-    }
-  };
-
   for (let pass = 0; pass < maxPasses; pass++) {
     let progressed = false;
     const currentFrontier = Array.from(frontier.entries()).sort(([a], [b]) => a.localeCompare(b));
@@ -264,7 +250,9 @@ async function hydratePlan(
             const count = typeof countRow.__kadak_count === "string" ? Number(countRow.__kadak_count) : Number(countRow.__kadak_count ?? 0);
             countMap.set(key, count);
           }
-          assignCount(tableRows, edge.relationName, edge.parentKey, countMap);
+          for (const row of tableRows) {
+            row[edge.relationName] = { _count: countMap.get(row[edge.parentKey]) ?? 0 };
+          }
           continue;
         }
 
@@ -288,7 +276,17 @@ async function hydratePlan(
           for (const [key, bucket] of buckets.byKey.entries()) {
             countMap.set(key, bucket.length);
           }
-          assignCount(tableRows, edge.relationName, edge.parentKey, countMap);
+          for (const row of tableRows) {
+            const count = countMap.get(row[edge.parentKey]) ?? 0;
+            const current = row[edge.relationName];
+            if (Array.isArray(current)) {
+              (current as Row[] & { _count?: number })._count = count;
+            } else if (current && typeof current === "object") {
+              (current as Row)._count = count;
+            } else {
+              row[edge.relationName] = { _count: count };
+            }
+          }
         }
 
         if (edge.relations.length > 0 && childRows.length > 0) {
