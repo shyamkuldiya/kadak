@@ -387,6 +387,9 @@ function quote(field) {
 function unique(arr) {
   return Array.from(new Set(arr));
 }
+function serializeValues(values) {
+  return values.map((value) => value === null ? "__null__" : typeof value === "object" ? JSON.stringify(value) : String(value)).join("|");
+}
 function buildRootSql(ast, schema) {
   const rootSchema = schema[ast.root] || {};
   const fields = ast.select ? Object.keys(ast.select).filter((f) => f !== "id") : getBaseFields(rootSchema);
@@ -453,14 +456,17 @@ function project(row, select) {
   if (select.id) out.id = row.id;
   return out;
 }
-async function fetchBatch(table, field, values, schema, select, client) {
+async function fetchBatch(table, field, values, schema, select, client, cache) {
+  const cacheKey = `${table}:${field}:${select ? Object.keys(select).sort().join(",") : "*"}:${serializeValues(values)}`;
+  if (cache?.has(cacheKey)) return await cache.get(cacheKey);
   const tableSchema = schema[table] || {};
   const fields = selectFields(select) ?? getBaseFields(tableSchema);
   const cols = unique(["id", ...fields]).map((f) => quote(f));
   const placeholders = values.map((_, idx) => `$${idx + 1}`);
   const sql = `SELECT ${cols.join(", ")} FROM ${table} WHERE ${quote(field)} IN (${placeholders.join(", ")})`;
-  const rows = await runQuery(sql, values, void 0, client);
-  return rows;
+  const query = runQuery(sql, values, void 0, client);
+  cache?.set(cacheKey, query);
+  return await query;
 }
 function relationShapeNeedsBatch(rel, schema, parentTable) {
   const relation = getRelation(schema[parentTable] || {}, rel.name);
@@ -473,7 +479,7 @@ function shouldUseMultiQuery(ast, schema) {
   if (depth(ast.relations) > 1) return true;
   return ast.relations.some((rel) => relationShapeNeedsBatch(rel, schema, ast.root));
 }
-async function hydrateLayer(tableName, rows, relations, schema, options, path) {
+async function hydrateLayer(tableName, rows, relations, schema, options, path, cache) {
   const tableSchema = schema[tableName] || {};
   await Promise.all(relations.map(async (rel) => {
     const relation = getRelation(tableSchema, rel.name);
@@ -503,11 +509,11 @@ async function hydrateLayer(tableName, rows, relations, schema, options, path) {
       }
       return;
     }
-    const childRows = await fetchBatch(nextTable, childKey, values, schema, rel.select, options.client);
+    const childRows = await fetchBatch(nextTable, childKey, values, schema, rel.select, options.client, cache);
     const nextPath = path.concat(tableName);
     const cyclic = cyclePath(nextPath, nextTable);
     if (!cyclic && rel.relations.length > 0) {
-      await hydrateLayer(nextTable, childRows, rel.relations, schema, options, nextPath);
+      await hydrateLayer(nextTable, childRows, rel.relations, schema, options, nextPath, cache);
     }
     if (childKey === "id") {
       const childMap = bucketRows(childRows, childKey, rel.select).single;
@@ -542,7 +548,8 @@ async function executeMultiQuery(ast, schema, options, resolvedUrl) {
   const { sql, values } = buildRootSql(ast, schema);
   const rootRows = await runQuery(sql, values, resolvedUrl, options.client);
   const rows = rootRows.map((row) => normalizeRoot(row, ast.select));
-  await hydrateLayer(ast.root, rows, ast.relations, schema, options, [ast.root]);
+  const cache = /* @__PURE__ */ new Map();
+  await hydrateLayer(ast.root, rows, ast.relations, schema, options, [ast.root], cache);
   return { rootRows: rows, sql, values };
 }
 

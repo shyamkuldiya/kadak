@@ -7,6 +7,7 @@ type Schema = Record<string, Record<string, SchemaEntry>>;
 type Row = Record<string, unknown>;
 type MultiOptions = { client?: pg.PoolClient; debug?: boolean };
 type RelationDefinition = { table: string; as: string; to: string; source: string };
+type CacheKey = string;
 
 function isRelationEntry(entry: SchemaEntry | undefined): entry is RelationDefinition {
   return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
@@ -37,6 +38,10 @@ function quote(field: string) {
 
 function unique<T>(arr: T[]): T[] {
   return Array.from(new Set(arr));
+}
+
+function serializeValues(values: unknown[]) {
+  return values.map((value) => value === null ? "__null__" : typeof value === "object" ? JSON.stringify(value) : String(value)).join("|");
 }
 
 function buildRootSql(ast: QueryAST, schema: Schema) {
@@ -127,15 +132,19 @@ async function fetchBatch(
   values: unknown[],
   schema: Schema,
   select?: Record<string, true>,
-  client?: pg.PoolClient
+  client?: pg.PoolClient,
+  cache?: Map<CacheKey, Promise<Row[]>>
 ) {
+  const cacheKey = `${table}:${field}:${select ? Object.keys(select).sort().join(",") : "*"}:${serializeValues(values)}`;
+  if (cache?.has(cacheKey)) return await cache.get(cacheKey)!;
   const tableSchema = schema[table] || {};
   const fields = selectFields(select) ?? getBaseFields(tableSchema);
   const cols = unique(["id", ...fields]).map((f) => quote(f));
   const placeholders = values.map((_, idx) => `$${idx + 1}`);
   const sql = `SELECT ${cols.join(", ")} FROM ${table} WHERE ${quote(field)} IN (${placeholders.join(", ")})`;
-  const rows = await runQuery(sql, values, undefined, client) as Row[];
-  return rows;
+  const query = runQuery(sql, values, undefined, client) as Promise<Row[]>;
+  cache?.set(cacheKey, query);
+  return await query;
 }
 
 function relationShapeNeedsBatch(rel: RelationAST, schema: Schema, parentTable: string): boolean {
@@ -157,7 +166,8 @@ async function hydrateLayer(
   relations: RelationAST[],
   schema: Schema,
   options: MultiOptions,
-  path: string[]
+  path: string[],
+  cache: Map<CacheKey, Promise<Row[]>>
 ) {
   const tableSchema = schema[tableName] || {};
   await Promise.all(relations.map(async (rel) => {
@@ -191,12 +201,12 @@ async function hydrateLayer(
       return;
     }
 
-    const childRows = await fetchBatch(nextTable, childKey, values, schema, rel.select, options.client);
+    const childRows = await fetchBatch(nextTable, childKey, values, schema, rel.select, options.client, cache);
     const nextPath = path.concat(tableName);
     const cyclic = cyclePath(nextPath, nextTable);
 
     if (!cyclic && rel.relations.length > 0) {
-      await hydrateLayer(nextTable, childRows, rel.relations, schema, options, nextPath);
+      await hydrateLayer(nextTable, childRows, rel.relations, schema, options, nextPath, cache);
     }
 
     if (childKey === "id") {
@@ -234,7 +244,8 @@ export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: 
   const { sql, values } = buildRootSql(ast, schema);
   const rootRows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
   const rows = rootRows.map((row) => normalizeRoot(row, ast.select));
-  await hydrateLayer(ast.root, rows, ast.relations, schema, options, [ast.root]);
+  const cache = new Map<CacheKey, Promise<Row[]>>();
+  await hydrateLayer(ast.root, rows, ast.relations, schema, options, [ast.root], cache);
   return { rootRows: rows, sql, values };
 }
 
