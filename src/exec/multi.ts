@@ -310,7 +310,6 @@ async function hydratePlan(
   rows: Row[],
   schema: Schema,
   options: MultiOptions,
-  path: string[],
   cache: Map<CacheKey, Promise<Row[]>>
 ) {
   const groupedEdges = new Map<string, ExecutionEdge[]>();
@@ -340,24 +339,63 @@ async function hydratePlan(
         if (visited.has(edgeKey)) continue;
         visited.add(edgeKey);
 
-        const relationNode: RelationAST = {
-          name: edge.relationName,
-          _count: edge._count,
-          select: edge.select,
-          relations: edge.relations
-        };
+        const values = parentKeySet(tableRows, edge.parentKey);
+        if (values.length === 0) {
+          for (const row of tableRows) {
+            row[edge.relationName] = edge._count ? { _count: 0 } : (edge.childKey === "id" ? null : []);
+          }
+          continue;
+        }
 
-        await hydrateLayer(tableName, tableRows, [relationNode], schema, options, path, cache);
         progressed = true;
 
-        const childRows = tableRows.flatMap((row) => {
-          const child = row[edge.relationName];
-          if (Array.isArray(child)) return child as Row[];
-          if (child && typeof child === "object") return [child as Row];
-          return [];
-        });
+        if (edge.mode === "count") {
+          const placeholders = values.map((_, idx) => `$${idx + 1}`);
+          const sql = `SELECT ${quote(edge.childKey)} AS "__kadak_fk", COUNT(*) AS "__kadak_count" FROM ${edge.childTable} WHERE ${quote(edge.childKey)} IN (${placeholders.join(", ")}) GROUP BY ${quote(edge.childKey)}`;
+          const countRows = await runQuery(sql, values, undefined, options.client) as Row[];
+          const countMap = new Map<unknown, number>();
+          for (const countRow of countRows) {
+            const key = countRow.__kadak_fk;
+            const count = typeof countRow.__kadak_count === "string" ? Number(countRow.__kadak_count) : Number(countRow.__kadak_count ?? 0);
+            countMap.set(key, count);
+          }
+          for (const row of tableRows) {
+            row[edge.relationName] = { _count: countMap.get(row[edge.parentKey]) ?? 0 };
+          }
+          continue;
+        }
 
-        if (childRows.length > 0 && edge.relations.length > 0) {
+        const childRows = await fetchBatch(edge.childTable, edge.childKey, values, schema, edge.select, options.client, cache);
+        const childBucket = edge.childKey === "id" ? bucketRows(childRows, edge.childKey, edge.select).single : bucketRows(childRows, edge.childKey, edge.select).byKey;
+
+        for (const row of tableRows) {
+          const parentValue = row[edge.parentKey];
+          if (edge.childKey === "id") {
+            const child = (childBucket as Map<unknown, Row | null>).get(parentValue) ?? null;
+            row[edge.relationName] = child ? project(child, edge.select) : null;
+          } else {
+            const items = (childBucket as Map<unknown, Row[]>).get(parentValue) || [];
+            row[edge.relationName] = items.map((child) => project(child, edge.select));
+          }
+        }
+
+        if (edge._count) {
+          const countMap = new Map<unknown, number>();
+          for (const [key, bucket] of bucketRows(childRows, edge.childKey, edge.select).byKey.entries()) {
+            countMap.set(key, bucket.length);
+          }
+          for (const row of tableRows) {
+            const current = row[edge.relationName];
+            const count = countMap.get(row[edge.parentKey]) ?? 0;
+            if (Array.isArray(current)) {
+              (current as Row[] & { _count?: number })._count = count;
+            } else if (current && typeof current === "object") {
+              (current as Row)._count = count;
+            }
+          }
+        }
+
+        if (edge.relations.length > 0 && childRows.length > 0) {
           const nextList = frontier.get(edge.childTable) || [];
           nextList.push(...childRows);
           frontier.set(edge.childTable, nextList);
@@ -375,7 +413,7 @@ export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: 
   const rows = rootRows.map((row) => normalizeRoot(row, ast.select));
   const cache = new Map<CacheKey, Promise<Row[]>>();
   const plan = buildExecutionPlan(ast, schema);
-  await hydratePlan(plan, rows, schema, options, [ast.root], cache);
+  await hydratePlan(plan, rows, schema, options, cache);
   return { rootRows: rows, sql, values };
 }
 
