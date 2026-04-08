@@ -117,6 +117,7 @@ function project(row: Row, select?: Record<string, true>) {
   for (const key of Object.keys(select)) {
     if (key in row) out[key] = row[key];
   }
+  if (select.id) out.id = row.id;
   return out;
 }
 
@@ -134,7 +135,7 @@ async function fetchBatch(
   const placeholders = values.map((_, idx) => `$${idx + 1}`);
   const sql = `SELECT ${cols.join(", ")} FROM ${table} WHERE ${quote(field)} IN (${placeholders.join(", ")})`;
   const rows = await runQuery(sql, values, undefined, client) as Row[];
-  return rows.map((row) => normalizeRoot(row, select));
+  return rows;
 }
 
 function relationShapeNeedsBatch(rel: RelationAST, schema: Schema, parentTable: string): boolean {
@@ -201,12 +202,13 @@ async function hydrateLayer(
     if (childKey === "id") {
       const childMap = bucketRows(childRows, childKey, rel.select).single;
       for (const row of rows) {
-        row[rel.name] = childMap.get(row[parentKey]) ?? null;
+        const child = childMap.get(row[parentKey]) ?? null;
+        row[rel.name] = child ? project(child, rel.select) : null;
       }
     } else {
       const grouped = bucketRows(childRows, childKey, rel.select).byKey;
       for (const row of rows) {
-        row[rel.name] = grouped.get(row[parentKey]) || [];
+        row[rel.name] = (grouped.get(row[parentKey]) || []).map((child) => project(child, rel.select));
       }
     }
 
