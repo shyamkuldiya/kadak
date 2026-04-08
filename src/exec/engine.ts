@@ -20,6 +20,7 @@ export type ExecutionEdge = {
   parentKey: string;
   childKey: string;
   select?: Record<string, true>;
+  selectKeys: string[];
   _count?: boolean;
   relations: RelationAST[];
 };
@@ -155,6 +156,7 @@ function collectEdges(astRoot: string, relations: RelationAST[], schema: Runtime
         parentKey: relation.source,
         childKey: relation.to || "id",
         select: rel.select,
+        selectKeys: rel.select ? Object.keys(rel.select) : [],
         _count: rel._count,
         relations: rel.relations,
       });
@@ -194,29 +196,30 @@ function parentKeys(rows: Row[], field: string) {
   return unique(rows.map((row) => row[field]).filter((value) => value !== null && value !== undefined));
 }
 
-function project(row: Row, select?: Record<string, true>) {
-  if (!select) {
+function project(row: Row, selectKeys?: string[], includeId = false) {
+  if (!selectKeys) {
     const out: Row = {};
     for (const [key, value] of Object.entries(row)) {
       if (key !== "id") out[key] = value;
     }
+    if (includeId && row.id !== undefined) out.id = row.id;
     return out;
   }
   const out: Row = {};
-  for (const key of Object.keys(select)) {
+  for (const key of selectKeys) {
     if (key in row) out[key] = row[key];
   }
-  if (select.id) out.id = row.id;
+  if (includeId && row.id !== undefined) out.id = row.id;
   return out;
 }
 
-function bucket(rows: Row[], keyField: string, select?: Record<string, true>) {
+function bucket(rows: Row[], keyField: string, selectKeys?: string[], includeId = false) {
   const many = new Map<unknown, Row[]>();
   const one = new Map<unknown, Row | null>();
   for (const row of rows) {
     const key = row[keyField];
     if (key === null || key === undefined) continue;
-    const projected = project(row, select);
+    const projected = project(row, selectKeys, includeId);
     const list = many.get(key) || [];
     list.push(projected);
     many.set(key, list);
@@ -320,15 +323,15 @@ export async function executeEngine(ast: QueryAST, schema: RuntimeSchema, option
         }
 
         const children = await fetchMany(edge.childTable, edge.childKey, values, schema, edge.select, options.client, cache);
-        const buckets = bucket(children, edge.childKey, edge.select);
+        const buckets = bucket(children, edge.childKey, edge.selectKeys, !!edge.select?.id);
         for (const row of rows) {
           const parentValue = row[edge.parentKey];
           if (edge.childKey === "id") {
             const child = buckets.one.get(parentValue) ?? null;
-            row[edge.relationName] = child ? project(child, edge.select) : null;
+            row[edge.relationName] = child ? project(child, edge.selectKeys, !!edge.select?.id) : null;
           } else {
             const items = buckets.many.get(parentValue) || [];
-            row[edge.relationName] = items.map((child) => project(child, edge.select));
+            row[edge.relationName] = items.map((child) => project(child, edge.selectKeys, !!edge.select?.id));
           }
         }
 
