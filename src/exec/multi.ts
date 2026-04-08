@@ -22,11 +22,6 @@ type ExecutionEdge = {
 
 type ExecutionPlan = {
   root: QueryAST["root"];
-  rootSelect?: Record<string, true>;
-  rootWhere?: QueryAST["where"];
-  rootOrderBy?: QueryAST["orderBy"];
-  rootTake?: QueryAST["take"];
-  rootSkip?: QueryAST["skip"];
   edges: ExecutionEdge[];
 };
 
@@ -197,11 +192,6 @@ function buildExecutionPlan(ast: QueryAST, schema: Schema): ExecutionPlan {
 
   return {
     root: ast.root,
-    rootSelect: ast.select,
-    rootWhere: ast.where,
-    rootOrderBy: ast.orderBy,
-    rootTake: ast.take,
-    rootSkip: ast.skip,
     edges
   };
 }
@@ -235,6 +225,20 @@ async function hydratePlan(
 
   const visited = new Set<string>();
   const maxPasses = Math.max(1, plan.edges.length + 1);
+
+  const assignCount = (tableRows: Row[], relationName: string, parentKey: string, countMap: Map<unknown, number>) => {
+    for (const row of tableRows) {
+      const count = countMap.get(row[parentKey]) ?? 0;
+      const current = row[relationName];
+      if (Array.isArray(current)) {
+        (current as Row[] & { _count?: number })._count = count;
+      } else if (current && typeof current === "object") {
+        (current as Row)._count = count;
+      } else {
+        row[relationName] = { _count: count };
+      }
+    }
+  };
 
   for (let pass = 0; pass < maxPasses; pass++) {
     let progressed = false;
@@ -270,9 +274,7 @@ async function hydratePlan(
             const count = typeof countRow.__kadak_count === "string" ? Number(countRow.__kadak_count) : Number(countRow.__kadak_count ?? 0);
             countMap.set(key, count);
           }
-          for (const row of tableRows) {
-            row[edge.relationName] = { _count: countMap.get(row[edge.parentKey]) ?? 0 };
-          }
+          assignCount(tableRows, edge.relationName, edge.parentKey, countMap);
           continue;
         }
 
@@ -295,15 +297,7 @@ async function hydratePlan(
           for (const [key, bucket] of bucketRows(childRows, edge.childKey, edge.select).byKey.entries()) {
             countMap.set(key, bucket.length);
           }
-          for (const row of tableRows) {
-            const current = row[edge.relationName];
-            const count = countMap.get(row[edge.parentKey]) ?? 0;
-            if (Array.isArray(current)) {
-              (current as Row[] & { _count?: number })._count = count;
-            } else if (current && typeof current === "object") {
-              (current as Row)._count = count;
-            }
-          }
+          assignCount(tableRows, edge.relationName, edge.parentKey, countMap);
         }
 
         if (edge.relations.length > 0 && childRows.length > 0) {

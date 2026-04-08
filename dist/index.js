@@ -447,11 +447,6 @@ function buildExecutionPlan(ast, schema) {
   walk(ast.root, ast.relations);
   return {
     root: ast.root,
-    rootSelect: ast.select,
-    rootWhere: ast.where,
-    rootOrderBy: ast.orderBy,
-    rootTake: ast.take,
-    rootSkip: ast.skip,
     edges
   };
 }
@@ -475,6 +470,19 @@ async function hydratePlan(plan, rows, schema, options, cache) {
   frontier.set(plan.root, rows);
   const visited = /* @__PURE__ */ new Set();
   const maxPasses = Math.max(1, plan.edges.length + 1);
+  const assignCount = (tableRows, relationName, parentKey, countMap) => {
+    for (const row of tableRows) {
+      const count = countMap.get(row[parentKey]) ?? 0;
+      const current = row[relationName];
+      if (Array.isArray(current)) {
+        current._count = count;
+      } else if (current && typeof current === "object") {
+        current._count = count;
+      } else {
+        row[relationName] = { _count: count };
+      }
+    }
+  };
   for (let pass = 0; pass < maxPasses; pass++) {
     let progressed = false;
     const currentFrontier = Array.from(frontier.entries()).sort(([a], [b]) => a.localeCompare(b));
@@ -504,9 +512,7 @@ async function hydratePlan(plan, rows, schema, options, cache) {
             const count = typeof countRow.__kadak_count === "string" ? Number(countRow.__kadak_count) : Number(countRow.__kadak_count ?? 0);
             countMap.set(key, count);
           }
-          for (const row of tableRows) {
-            row[edge.relationName] = { _count: countMap.get(row[edge.parentKey]) ?? 0 };
-          }
+          assignCount(tableRows, edge.relationName, edge.parentKey, countMap);
           continue;
         }
         const childRows = await fetchBatch(edge.childTable, edge.childKey, values, schema, edge.select, options.client, cache);
@@ -526,15 +532,7 @@ async function hydratePlan(plan, rows, schema, options, cache) {
           for (const [key, bucket] of bucketRows(childRows, edge.childKey, edge.select).byKey.entries()) {
             countMap.set(key, bucket.length);
           }
-          for (const row of tableRows) {
-            const current = row[edge.relationName];
-            const count = countMap.get(row[edge.parentKey]) ?? 0;
-            if (Array.isArray(current)) {
-              current._count = count;
-            } else if (current && typeof current === "object") {
-              current._count = count;
-            }
-          }
+          assignCount(tableRows, edge.relationName, edge.parentKey, countMap);
         }
         if (edge.relations.length > 0 && childRows.length > 0) {
           const nextList = frontier.get(edge.childTable) || [];
