@@ -50,8 +50,10 @@ function buildAST(queryInput) {
   const rootKey = Object.keys(queryInput)[0];
   const rootValue = queryInput[rootKey];
   const { where, relations, orderBy, select, take, skip, _count } = parseNode(rootValue, true);
+  const shapeKey = buildShapeKey(rootKey, rootValue);
   return {
     root: rootKey,
+    shapeKey,
     _count,
     select,
     take,
@@ -60,6 +62,25 @@ function buildAST(queryInput) {
     orderBy,
     relations
   };
+}
+function buildShapeKey(rootKey, rootValue) {
+  const walk = (input) => {
+    const relationKeys = Object.keys(input).filter((key) => !["where", "orderBy", "select", "_count", "take", "skip"].includes(key)).sort();
+    return relationKeys.map((key) => {
+      const value = input[key];
+      if (value === true) return `${key}:1[]`;
+      if (typeof value === "object" && value !== null) {
+        const rel = value;
+        const nestedSelect = rel.select ? Object.keys(rel.select).sort().join(",") : "";
+        return `${key}:${rel._count === true ? 1 : 0}:${nestedSelect}[${walk(rel)}]`;
+      }
+      return `${key}:0[]`;
+    }).join("|");
+  };
+  const select = rootValue.select ? Object.keys(rootValue.select).sort().join(",") : "";
+  const where = rootValue.where ? Object.keys(rootValue.where).sort().join(",") : "";
+  const orderBy = rootValue.orderBy ? Object.keys(rootValue.orderBy).sort().join(",") : "";
+  return `${rootKey}|${rootValue._count === true ? 1 : 0}|${select}|${where}|${orderBy}|${rootValue.take !== void 0 ? 1 : 0}|${rootValue.skip !== void 0 ? 1 : 0}|${walk(rootValue)}`;
 }
 function parseNode(input, isRoot) {
   const where = [];
@@ -424,24 +445,6 @@ function buildRootSql(ast, schema) {
   if (ast.skip !== void 0) sql += ` OFFSET ${ast.skip}`;
   return { sql, values };
 }
-function shapeKey(ast) {
-  const walk = (relations) => relations.slice().sort((a, b) => a.name.localeCompare(b.name)).map((rel) => ({
-    name: rel.name,
-    count: !!rel._count,
-    select: rel.select ? Object.keys(rel.select).sort() : [],
-    relations: walk(rel.relations)
-  }));
-  return JSON.stringify({
-    root: ast.root,
-    count: !!ast._count,
-    select: ast.select ? Object.keys(ast.select).sort() : [],
-    where: ast.where ? ast.where.map((predicate) => predicate.field).sort() : [],
-    orderBy: ast.orderBy ? { field: ast.orderBy.field, direction: ast.orderBy.direction } : null,
-    take: ast.take !== void 0,
-    skip: ast.skip !== void 0,
-    relations: walk(ast.relations)
-  });
-}
 function collectEdges(astRoot, relations, schema) {
   const edges = [];
   const queue = [{ tableName: astRoot, relations }];
@@ -468,7 +471,7 @@ function collectEdges(astRoot, relations, schema) {
   return edges;
 }
 function prepareExecution(ast, schema, schemaSignatureValue) {
-  const cacheKey = `${schemaSignatureValue}::${shapeKey(ast)}`;
+  const cacheKey = `${schemaSignatureValue}::${ast.shapeKey || ast.root}`;
   const cached = planCache.get(cacheKey);
   if (cached) return cached;
   const root = buildRootSql(ast, schema);

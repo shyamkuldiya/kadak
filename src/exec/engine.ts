@@ -118,30 +118,6 @@ function buildRootSql(ast: QueryAST, schema: RuntimeSchema) {
   return { sql, values };
 }
 
-function shapeKey(ast: QueryAST) {
-  const walk = (relations: RelationAST[]): unknown =>
-    relations
-      .slice()
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((rel) => ({
-        name: rel.name,
-        count: !!rel._count,
-        select: rel.select ? Object.keys(rel.select).sort() : [],
-        relations: walk(rel.relations),
-      }));
-
-  return JSON.stringify({
-    root: ast.root,
-    count: !!ast._count,
-    select: ast.select ? Object.keys(ast.select).sort() : [],
-    where: ast.where ? ast.where.map((predicate) => predicate.field).sort() : [],
-    orderBy: ast.orderBy ? { field: ast.orderBy.field, direction: ast.orderBy.direction } : null,
-    take: ast.take !== undefined,
-    skip: ast.skip !== undefined,
-    relations: walk(ast.relations),
-  });
-}
-
 function collectEdges(astRoot: string, relations: RelationAST[], schema: RuntimeSchema) {
   const edges: ExecutionEdge[] = [];
   const queue: Array<{ tableName: string; relations: RelationAST[] }> = [{ tableName: astRoot, relations }];
@@ -172,7 +148,7 @@ function collectEdges(astRoot: string, relations: RelationAST[], schema: Runtime
 }
 
 function prepareExecution(ast: QueryAST, schema: RuntimeSchema, schemaSignatureValue: string): PreparedPlan {
-  const cacheKey = `${schemaSignatureValue}::${shapeKey(ast)}`;
+  const cacheKey = `${schemaSignatureValue}::${ast.shapeKey || ast.root}`;
   const cached = planCache.get(cacheKey);
   if (cached) return cached;
 

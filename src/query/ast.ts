@@ -14,6 +14,7 @@ export type OrderBy = {
 
 export type QueryAST = {
   root: string;
+  shapeKey?: string;
   _count?: boolean;
   select?: Record<string, true>;
   take?: number;

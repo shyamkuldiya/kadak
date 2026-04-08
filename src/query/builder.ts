@@ -5,9 +5,11 @@ export function buildAST(queryInput: Record<string, unknown>): QueryAST {
   const rootValue = queryInput[rootKey] as Record<string, unknown>;
   
   const { where, relations, orderBy, select, take, skip, _count } = parseNode(rootValue, true);
+  const shapeKey = buildShapeKey(rootKey, rootValue);
   
   return {
     root: rootKey,
+    shapeKey,
     _count,
     select,
     take,
@@ -16,6 +18,32 @@ export function buildAST(queryInput: Record<string, unknown>): QueryAST {
     orderBy,
     relations
   };
+}
+
+function buildShapeKey(rootKey: string, rootValue: Record<string, unknown>): string {
+  const walk = (input: Record<string, unknown>): string => {
+    const relationKeys = Object.keys(input)
+      .filter((key) => !["where", "orderBy", "select", "_count", "take", "skip"].includes(key))
+      .sort();
+
+    return relationKeys
+      .map((key) => {
+        const value = input[key];
+        if (value === true) return `${key}:1[]`;
+        if (typeof value === "object" && value !== null) {
+          const rel = value as Record<string, unknown>;
+          const nestedSelect = rel.select ? Object.keys(rel.select as Record<string, unknown>).sort().join(",") : "";
+          return `${key}:${rel._count === true ? 1 : 0}:${nestedSelect}[${walk(rel)}]`;
+        }
+        return `${key}:0[]`;
+      })
+      .join("|");
+  };
+
+  const select = rootValue.select ? Object.keys(rootValue.select as Record<string, unknown>).sort().join(",") : "";
+  const where = rootValue.where ? Object.keys(rootValue.where as Record<string, unknown>).sort().join(",") : "";
+  const orderBy = rootValue.orderBy ? Object.keys(rootValue.orderBy as Record<string, unknown>).sort().join(",") : "";
+  return `${rootKey}|${rootValue._count === true ? 1 : 0}|${select}|${where}|${orderBy}|${rootValue.take !== undefined ? 1 : 0}|${rootValue.skip !== undefined ? 1 : 0}|${walk(rootValue)}`;
 }
 
 function parseNode(input: Record<string, unknown>, isRoot: boolean): { where: Predicate[], relations: RelationAST[], orderBy?: OrderBy, select?: Record<string, true>, take?: number, skip?: number, _count?: boolean } {
