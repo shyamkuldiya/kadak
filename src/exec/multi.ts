@@ -5,90 +5,11 @@ import { runQuery } from "./client.js";
 type SchemaEntry = string | { table: string; as: string; to: string; source: string } | Record<string, unknown>;
 type Schema = Record<string, Record<string, SchemaEntry>>;
 type Row = Record<string, unknown>;
-
-type MultiOptions = {
-  client?: pg.PoolClient;
-  debug?: boolean;
-};
-
-type RelationDefinition = {
-  table: string;
-  as: string;
-  to: string;
-  source: string;
-};
+type MultiOptions = { client?: pg.PoolClient; debug?: boolean };
+type RelationDefinition = { table: string; as: string; to: string; source: string };
 
 function isRelationEntry(entry: SchemaEntry | undefined): entry is RelationDefinition {
   return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
-}
-
-function getBaseFields(tableSchema: Record<string, SchemaEntry>): string[] {
-  return Object.keys(tableSchema).filter((field) => {
-    const mapping = tableSchema[field];
-    if (field === "id") return false;
-    if (typeof mapping === "string" && mapping.includes(".")) return false;
-    return !isRelationEntry(mapping);
-  });
-}
-
-function quote(field: string): string {
-  return `"${field}"`;
-}
-
-function buildSelectSql(
-  tableName: string,
-  selectFields: string[],
-  whereField?: string,
-  whereValues?: unknown[],
-  orderBy?: { field: string; direction: "asc" | "desc" },
-  take?: number,
-  skip?: number
-) {
-  const fields = Array.from(new Set(["id", ...selectFields]));
-  const values: unknown[] = [];
-  const sqlFields = fields.map((field) => `${quote(field)}`);
-  let sql = `SELECT ${sqlFields.join(", ")} FROM ${tableName}`;
-
-  if (whereField && whereValues && whereValues.length > 0) {
-    const placeholders = whereValues.map((_, idx) => {
-      values.push(whereValues[idx]);
-      return `$${idx + 1}`;
-    });
-    sql += ` WHERE ${quote(whereField)} IN (${placeholders.join(", ")})`;
-  }
-
-  if (orderBy) {
-    sql += ` ORDER BY ${quote(orderBy.field)} ${orderBy.direction.toUpperCase()}`;
-  }
-
-  if (take !== undefined) {
-    sql += ` LIMIT ${take}`;
-  }
-
-  if (skip !== undefined) {
-    sql += ` OFFSET ${skip}`;
-  }
-
-  return { sql, values };
-}
-
-function buildCountSql(tableName: string, countField: string, whereField: string, whereValues: unknown[]) {
-  const values: unknown[] = [];
-  const placeholders = whereValues.map((value, idx) => {
-    values.push(value);
-    return `$${idx + 1}`;
-  });
-  const sql = `SELECT ${quote(countField)} AS "__kadak_fk", COUNT(*) AS "__kadak_count" FROM ${tableName} WHERE ${quote(countField)} IN (${placeholders.join(", ")}) GROUP BY ${quote(countField)}`;
-  return { sql, values };
-}
-
-export function buildMultiRootSql(
-  ast: QueryAST,
-  schema: Schema
-) {
-  const rootSchema = schema[ast.root] || {};
-  const rootFields = ast.select ? Object.keys(ast.select).filter((f) => f !== "id") : getBaseFields(rootSchema);
-  return buildSelectSql(ast.root, rootFields, undefined, undefined, ast.orderBy, ast.take, ast.skip);
 }
 
 function getRelation(tableSchema: Record<string, SchemaEntry>, relName: string): RelationDefinition | undefined {
@@ -101,46 +22,51 @@ function getRelation(tableSchema: Record<string, SchemaEntry>, relName: string):
   return undefined;
 }
 
-function shouldSelectId(select?: Record<string, true>) {
-  return !select || !!select.id;
+function getBaseFields(tableSchema: Record<string, SchemaEntry>): string[] {
+  return Object.keys(tableSchema).filter((field) => {
+    const mapping = tableSchema[field];
+    if (field === "id") return false;
+    if (typeof mapping === "string" && mapping.includes(".")) return false;
+    return !isRelationEntry(mapping);
+  });
 }
 
-function projectRow(row: Row, select?: Record<string, true>) {
-  const projected: Row = {};
-  if (select) {
-    for (const key of Object.keys(select)) {
-      if (key in row) projected[key] = row[key];
-    }
-  } else {
-    for (const [key, value] of Object.entries(row)) {
-      if (key !== "id") projected[key] = value;
-    }
-  }
-  return projected;
+function quote(field: string) {
+  return `"${field}"`;
 }
 
-function maxDepth(relations: RelationAST[]): number {
-  let depth = 0;
-  for (const rel of relations) {
-    depth = Math.max(depth, 1 + maxDepth(rel.relations));
-  }
-  return depth;
+function unique<T>(arr: T[]): T[] {
+  return Array.from(new Set(arr));
 }
 
-function hasReverseRelation(tableName: string, relations: RelationAST[], schema: Schema): boolean {
-  const tableSchema = schema[tableName] || {};
-  for (const rel of relations) {
-    const mapping = getRelation(tableSchema, rel.name);
-    if (!mapping) continue;
-    if (mapping.source === "id" && mapping.to !== "id") return true;
-    if (hasReverseRelation(mapping.table, rel.relations, schema)) return true;
+function buildRootSql(ast: QueryAST, schema: Schema) {
+  const rootSchema = schema[ast.root] || {};
+  const fields = ast.select ? Object.keys(ast.select).filter((f) => f !== "id") : getBaseFields(rootSchema);
+  const cols = unique(["id", ...fields]).map((field) => quote(field));
+  let sql = `SELECT ${cols.join(", ")} FROM ${ast.root}`;
+  const values: unknown[] = [];
+
+  if (ast.where && ast.where.length > 0) {
+    const clauses = ast.where.map((p, idx) => {
+      values.push(p.value);
+      return `${quote(p.field)} = $${idx + 1}`;
+    });
+    sql += ` WHERE ${clauses.join(" AND ")}`;
   }
-  return false;
+
+  if (ast.orderBy) {
+    sql += ` ORDER BY ${quote(ast.orderBy.field)} ${ast.orderBy.direction.toUpperCase()}`;
+  }
+
+  if (ast.take !== undefined) sql += ` LIMIT ${ast.take}`;
+  if (ast.skip !== undefined) sql += ` OFFSET ${ast.skip}`;
+
+  return { sql, values };
 }
 
 function normalizeRoot(row: Row, select?: Record<string, true>) {
   const out: Row = {};
-  if (row.id !== undefined && shouldSelectId(select)) out.id = row.id;
+  if (!select || select.id) out.id = row.id;
   for (const [key, value] of Object.entries(row)) {
     if (key === "id") continue;
     if (!select || select[key]) out[key] = value;
@@ -148,155 +74,170 @@ function normalizeRoot(row: Row, select?: Record<string, true>) {
   return out;
 }
 
-async function fetchMany(
-  tableName: string,
+function selectFields(select?: Record<string, true>) {
+  return select ? Object.keys(select).filter((field) => field !== "id") : undefined;
+}
+
+function parentKeySet(rows: Row[], field: string) {
+  return unique(rows.map((row) => row[field]).filter((value) => value !== null && value !== undefined));
+}
+
+function cyclePath(path: string[], next: string) {
+  return path.includes(next);
+}
+
+type LoadedBucket = {
+  byKey: Map<unknown, Row[]>;
+  single: Map<unknown, Row | null>;
+};
+
+function bucketRows(rows: Row[], keyField: string, select?: Record<string, true>): LoadedBucket {
+  const byKey = new Map<unknown, Row[]>();
+  const single = new Map<unknown, Row | null>();
+  for (const row of rows) {
+    const key = row[keyField];
+    if (key === null || key === undefined) continue;
+    const projected = project(row, select);
+    const group = byKey.get(key) || [];
+    group.push(projected);
+    byKey.set(key, group);
+    if (!single.has(key)) single.set(key, projected);
+  }
+  return { byKey, single };
+}
+
+function project(row: Row, select?: Record<string, true>) {
+  const out: Row = {};
+  if (!select) {
+    for (const [key, value] of Object.entries(row)) {
+      if (key !== "id") out[key] = value;
+    }
+    return out;
+  }
+  for (const key of Object.keys(select)) {
+    if (key in row) out[key] = row[key];
+  }
+  return out;
+}
+
+async function fetchBatch(
+  table: string,
+  field: string,
+  values: unknown[],
   schema: Schema,
-  whereField: string,
-  whereValues: unknown[],
   select?: Record<string, true>,
-  orderBy?: { field: string; direction: "asc" | "desc" },
-  take?: number,
-  skip?: number,
   client?: pg.PoolClient
 ) {
-  const tableSchema = schema[tableName] || {};
-  const baseFields = getBaseFields(tableSchema);
-  const selectedFields = select ? Object.keys(select).filter((f) => f !== "id") : baseFields;
-  const { sql, values } = buildSelectSql(tableName, selectedFields, whereField, whereValues, orderBy, take, skip);
+  const tableSchema = schema[table] || {};
+  const fields = selectFields(select) ?? getBaseFields(tableSchema);
+  const cols = unique(["id", ...fields]).map((f) => quote(f));
+  const placeholders = values.map((_, idx) => `$${idx + 1}`);
+  const sql = `SELECT ${cols.join(", ")} FROM ${table} WHERE ${quote(field)} IN (${placeholders.join(", ")})`;
   const rows = await runQuery(sql, values, undefined, client) as Row[];
   return rows.map((row) => normalizeRoot(row, select));
 }
 
-function collectValues(rows: Row[], field: string): unknown[] {
-  const values = new Set<unknown>();
-  for (const row of rows) {
-    const value = row[field];
-    if (value !== null && value !== undefined) values.add(value);
-  }
-  return Array.from(values);
+function relationShapeNeedsBatch(rel: RelationAST, schema: Schema, parentTable: string): boolean {
+  const relation = getRelation(schema[parentTable] || {}, rel.name);
+  if (!relation) return false;
+  return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
 }
 
-async function hydrateRelations(
+function shouldUseMultiQuery(ast: QueryAST, schema: Schema): boolean {
+  const depth = (relations: RelationAST[]): number => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
+  if (ast._count) return false;
+  if (depth(ast.relations) > 1) return true;
+  return ast.relations.some((rel) => relationShapeNeedsBatch(rel, schema, ast.root));
+}
+
+async function hydrateLayer(
   tableName: string,
   rows: Row[],
   relations: RelationAST[],
   schema: Schema,
   options: MultiOptions,
-  ancestry: string[] = []
-): Promise<void> {
+  path: string[]
+) {
   const tableSchema = schema[tableName] || {};
   for (const rel of relations) {
     const relation = getRelation(tableSchema, rel.name);
-    if (!relation || rows.length === 0) continue;
+    if (!relation) continue;
 
-    const parentKeyField = relation.source;
-    const childKeyField = relation.to || "id";
-    const parentValues = collectValues(rows, parentKeyField);
-    if (parentValues.length === 0) {
+    const nextTable = relation.table;
+    const parentKey = relation.source;
+    const childKey = relation.to || "id";
+    const values = parentKeySet(rows, parentKey);
+    if (values.length === 0) {
       for (const row of rows) {
-        if (rel._count) {
-          row[rel.name] = { _count: 0 };
-        } else if (childKeyField === "id") {
-          row[rel.name] = null;
-        } else {
-          row[rel.name] = [];
-        }
+        row[rel.name] = rel._count ? { _count: 0 } : (childKey === "id" ? null : []);
       }
       continue;
     }
 
     if (rel._count && !rel.select && rel.relations.length === 0) {
-      const { sql, values } = buildCountSql(relation.table, childKeyField, parentKeyField, parentValues);
+      const placeholders = values.map((_, idx) => `$${idx + 1}`);
+      const sql = `SELECT ${quote(childKey)} AS "__kadak_fk", COUNT(*) AS "__kadak_count" FROM ${nextTable} WHERE ${quote(childKey)} IN (${placeholders.join(", ")}) GROUP BY ${quote(childKey)}`;
       const countRows = await runQuery(sql, values, undefined, options.client) as Row[];
       const countMap = new Map<unknown, number>();
-      for (const row of countRows) {
-        const key = row.__kadak_fk;
-        const raw = row.__kadak_count;
-        countMap.set(key, typeof raw === "string" ? Number(raw) : Number(raw ?? 0));
+      for (const countRow of countRows) {
+        const key = countRow.__kadak_fk;
+        const count = typeof countRow.__kadak_count === "string" ? Number(countRow.__kadak_count) : Number(countRow.__kadak_count ?? 0);
+        countMap.set(key, count);
       }
       for (const row of rows) {
-        row[rel.name] = { _count: countMap.get(row[parentKeyField]) ?? 0 };
+        row[rel.name] = { _count: countMap.get(row[parentKey]) ?? 0 };
       }
       continue;
     }
 
-    const childRows = await fetchMany(
-      relation.table,
-      schema,
-      childKeyField,
-      parentValues,
-      rel.select,
-      undefined,
-      undefined,
-      undefined,
-      options.client
-    );
+    const childRows = await fetchBatch(nextTable, childKey, values, schema, rel.select, options.client);
+    const nextPath = path.concat(tableName);
+    const cyclic = cyclePath(nextPath, nextTable);
 
-    const nextAncestry = ancestry.concat(tableName);
-    const isCycle = nextAncestry.includes(relation.table);
-    if (!isCycle) {
-      await hydrateRelations(relation.table, childRows, rel.relations, schema, options, nextAncestry);
+    if (!cyclic && rel.relations.length > 0) {
+      await hydrateLayer(nextTable, childRows, rel.relations, schema, options, nextPath);
     }
 
-    if (childKeyField === "id") {
-      const childMap = new Map<unknown, Row>();
-      for (const child of childRows) {
-        if (child.id !== undefined) childMap.set(child.id, child);
-      }
+    if (childKey === "id") {
+      const childMap = bucketRows(childRows, childKey, rel.select).single;
       for (const row of rows) {
-        row[rel.name] = childMap.get(row[parentKeyField]) ?? null;
+        row[rel.name] = childMap.get(row[parentKey]) ?? null;
       }
     } else {
-      const groups = new Map<unknown, Row[]>();
-      for (const child of childRows) {
-        const key = (child as Row)[childKeyField];
-        if (key === null || key === undefined) continue;
-        const bucket = groups.get(key) || [];
-        bucket.push(child);
-        groups.set(key, bucket);
-      }
+      const grouped = bucketRows(childRows, childKey, rel.select).byKey;
       for (const row of rows) {
-        row[rel.name] = groups.get(row[parentKeyField]) || [];
+        row[rel.name] = grouped.get(row[parentKey]) || [];
       }
     }
 
     if (rel._count) {
-      const countValues = new Set<unknown>();
-      for (const child of childRows) {
-        const key = child[childKeyField];
-        if (key !== null && key !== undefined) countValues.add(key);
-      }
       const countMap = new Map<unknown, number>();
-      for (const key of countValues) {
-        const bucket = childRows.filter((row) => row[childKeyField] === key);
+      for (const [key, bucket] of bucketRows(childRows, childKey, rel.select).byKey.entries()) {
         countMap.set(key, bucket.length);
       }
       for (const row of rows) {
         const current = row[rel.name];
+        const count = countMap.get(row[parentKey]) ?? 0;
         if (Array.isArray(current)) {
-          (current as Row[] & { _count?: number })._count = countMap.get(row[parentKeyField]) ?? 0;
+          (current as Row[] & { _count?: number })._count = count;
         } else if (current && typeof current === "object") {
-          (current as Row)._count = countMap.get(row[parentKeyField]) ?? 0;
+          (current as Row)._count = count;
         }
       }
     }
   }
 }
 
-export async function executeMultiQuery(
-  ast: QueryAST,
-  schema: Schema,
-  options: MultiOptions,
-  resolvedUrl?: string
-) {
-  const { sql, values } = buildMultiRootSql(ast, schema);
-  const rows = await runQuery(sql, values, resolvedUrl, options.client) as Row[];
-  const rootRows = rows.map((row) => normalizeRoot(row, ast.select));
-  await hydrateRelations(ast.root, rootRows, ast.relations, schema, options, [ast.root]);
-  return { rootRows, sql, values };
+export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: MultiOptions, resolvedUrl?: string) {
+  const { sql, values } = buildRootSql(ast, schema);
+  const rootRows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
+  const rows = rootRows.map((row) => normalizeRoot(row, ast.select));
+  await hydrateLayer(ast.root, rows, ast.relations, schema, options, [ast.root]);
+  return { rootRows: rows, sql, values };
 }
 
-export function shouldUseMultiQuery(ast: QueryAST, schema: Schema): boolean {
-  if (ast._count) return false;
-  return maxDepth(ast.relations) > 1 || hasReverseRelation(ast.root, ast.relations, schema);
+export function buildMultiRootSql(ast: QueryAST, schema: Schema) {
+  return buildRootSql(ast, schema);
 }
+
+export { shouldUseMultiQuery };
