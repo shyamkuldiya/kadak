@@ -153,8 +153,8 @@ function buildExecutionPlan(ast: QueryAST, schema: Schema): ExecutionPlan {
   const edges: ExecutionEdge[] = [];
   const queue: Array<{ tableName: string; relations: RelationAST[] }> = [{ tableName: ast.root, relations: ast.relations }];
 
-  while (queue.length > 0) {
-    const { tableName, relations } = queue.shift()!;
+  for (let cursor = 0; cursor < queue.length; cursor++) {
+    const { tableName, relations } = queue[cursor];
     const tableSchema = schema[tableName] || {};
     for (const rel of relations) {
       const relation = getRelation(tableSchema, rel.name);

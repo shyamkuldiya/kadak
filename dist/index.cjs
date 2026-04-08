@@ -459,8 +459,8 @@ async function fetchBatch(table, field, values, schema, select, client, cache) {
 function buildExecutionPlan(ast, schema) {
   const edges = [];
   const queue = [{ tableName: ast.root, relations: ast.relations }];
-  while (queue.length > 0) {
-    const { tableName, relations } = queue.shift();
+  for (let cursor = 0; cursor < queue.length; cursor++) {
+    const { tableName, relations } = queue[cursor];
     const tableSchema = schema[tableName] || {};
     for (const rel of relations) {
       const relation = getRelation(tableSchema, rel.name);
