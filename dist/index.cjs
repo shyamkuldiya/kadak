@@ -372,6 +372,9 @@ function unique(arr) {
 function valuesKey(values) {
   return values.map((value) => value === null ? "__null__" : typeof value === "object" ? JSON.stringify(value) : String(value)).join("|");
 }
+function arrayValue(values) {
+  return values.map((value) => value);
+}
 function isRelationEntry(entry) {
   return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
 }
@@ -522,9 +525,8 @@ async function fetchMany(table, field, values, schema, select, client, cache) {
   const tableSchema = schema[table] || { fields: [], relations: {} };
   const fields = select ? Object.keys(select).filter((field2) => field2 !== "id") : tableSchema.fields;
   const cols = unique(["id", ...fields]).map(quote);
-  const placeholders = values.map((_, index) => `$${index + 1}`);
-  const sql = `SELECT ${cols.join(", ")} FROM ${table} WHERE ${quote(field)} IN (${placeholders.join(", ")})`;
-  const query = runQuery(sql, values, void 0, client);
+  const sql = `SELECT ${cols.join(", ")} FROM ${table} WHERE ${quote(field)} = ANY($1)`;
+  const query = runQuery(sql, [arrayValue(values)], void 0, client);
   cache?.set(key, query);
   return await query;
 }
@@ -577,9 +579,8 @@ async function executeEngine(ast, schema, options, resolvedUrl, schemaSignatureV
         }
         progressed = true;
         if (edge._count && !edge.select && edge.relations.length === 0) {
-          const placeholders = values2.map((_, index) => `$${index + 1}`);
-          const sql2 = `SELECT ${quote(edge.childKey)} AS "__kadak_fk", COUNT(*) AS "__kadak_count" FROM ${edge.childTable} WHERE ${quote(edge.childKey)} IN (${placeholders.join(", ")}) GROUP BY ${quote(edge.childKey)}`;
-          const countRows = await runQuery(sql2, values2, void 0, options.client);
+          const sql2 = `SELECT ${quote(edge.childKey)} AS "__kadak_fk", COUNT(*) AS "__kadak_count" FROM ${edge.childTable} WHERE ${quote(edge.childKey)} = ANY($1) GROUP BY ${quote(edge.childKey)}`;
+          const countRows = await runQuery(sql2, [arrayValue(values2)], void 0, options.client);
           const counts = /* @__PURE__ */ new Map();
           for (const row of countRows) {
             const key2 = row.__kadak_fk;

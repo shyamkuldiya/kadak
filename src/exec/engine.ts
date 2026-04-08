@@ -52,6 +52,10 @@ function valuesKey(values: unknown[]) {
     .join("|");
 }
 
+function arrayValue(values: unknown[]) {
+  return values.map((value) => value);
+}
+
 function isRelationEntry(entry: SchemaEntry | undefined): entry is RuntimeRelation {
   return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
 }
@@ -242,9 +246,8 @@ async function fetchMany(
   const tableSchema = schema[table] || { fields: [], relations: {} };
   const fields = select ? Object.keys(select).filter((field) => field !== "id") : tableSchema.fields;
   const cols = unique(["id", ...fields]).map(quote);
-  const placeholders = values.map((_, index) => `$${index + 1}`);
-  const sql = `SELECT ${cols.join(", ")} FROM ${table} WHERE ${quote(field)} IN (${placeholders.join(", ")})`;
-  const query = runQuery(sql, values, undefined, client) as Promise<Row[]>;
+  const sql = `SELECT ${cols.join(", ")} FROM ${table} WHERE ${quote(field)} = ANY($1)`;
+  const query = runQuery(sql, [arrayValue(values)], undefined, client) as Promise<Row[]>;
   cache?.set(key, query);
   return await query;
 }
@@ -309,9 +312,8 @@ export async function executeEngine(ast: QueryAST, schema: RuntimeSchema, option
         progressed = true;
 
         if (edge._count && !edge.select && edge.relations.length === 0) {
-          const placeholders = values.map((_, index) => `$${index + 1}`);
-          const sql = `SELECT ${quote(edge.childKey)} AS "__kadak_fk", COUNT(*) AS "__kadak_count" FROM ${edge.childTable} WHERE ${quote(edge.childKey)} IN (${placeholders.join(", ")}) GROUP BY ${quote(edge.childKey)}`;
-          const countRows = (await runQuery(sql, values, undefined, options.client)) as Row[];
+          const sql = `SELECT ${quote(edge.childKey)} AS "__kadak_fk", COUNT(*) AS "__kadak_count" FROM ${edge.childTable} WHERE ${quote(edge.childKey)} = ANY($1) GROUP BY ${quote(edge.childKey)}`;
+          const countRows = (await runQuery(sql, [arrayValue(values)], undefined, options.client)) as Row[];
           const counts = new Map<unknown, number>();
           for (const row of countRows) {
             const key = row.__kadak_fk;
