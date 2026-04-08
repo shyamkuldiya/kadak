@@ -1,7 +1,7 @@
 import pg from "pg";
 import { QueryAST } from "../query/ast.js";
 import { runQuery } from "./client.js";
-import { buildExecutionPlan, shouldUseMultiQuery, type ExecutionEdge, type ExecutionPlan, type Schema } from "./multi-plan.js";
+import { buildExecutionPlan, type ExecutionEdge, type ExecutionPlan, type Schema } from "./multi-plan.js";
 
 type Row = Record<string, unknown>;
 type MultiOptions = { client?: pg.PoolClient; debug?: boolean };
