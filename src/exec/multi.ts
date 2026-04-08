@@ -8,6 +8,29 @@ type Row = Record<string, unknown>;
 type MultiOptions = { client?: pg.PoolClient; debug?: boolean };
 type RelationDefinition = { table: string; as: string; to: string; source: string };
 type CacheKey = string;
+type LoadMode = "single" | "many" | "count";
+
+type ExecutionEdge = {
+  parentTable: string;
+  relationName: string;
+  childTable: string;
+  parentKey: string;
+  childKey: string;
+  select?: Record<string, true>;
+  _count?: boolean;
+  relations: RelationAST[];
+  mode: LoadMode;
+};
+
+type ExecutionPlan = {
+  root: QueryAST["root"];
+  rootSelect?: Record<string, true>;
+  rootWhere?: QueryAST["where"];
+  rootOrderBy?: QueryAST["orderBy"];
+  rootTake?: QueryAST["take"];
+  rootSkip?: QueryAST["skip"];
+  edges: ExecutionEdge[];
+};
 
 function isRelationEntry(entry: SchemaEntry | undefined): entry is RelationDefinition {
   return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
@@ -153,6 +176,48 @@ function relationShapeNeedsBatch(rel: RelationAST, schema: Schema, parentTable: 
   return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
 }
 
+function buildExecutionPlan(ast: QueryAST, schema: Schema): ExecutionPlan {
+  const edges: ExecutionEdge[] = [];
+
+  const walk = (tableName: string, relations: RelationAST[]) => {
+    const tableSchema = schema[tableName] || {};
+    for (const rel of relations) {
+      const relation = getRelation(tableSchema, rel.name);
+      if (!relation) continue;
+      const childTable = relation.table;
+      const mode: LoadMode = rel._count && !rel.select && rel.relations.length === 0
+        ? "count"
+        : relation.source === "id" && relation.to === "id" && rel.relations.length === 0
+          ? "single"
+          : "many";
+      edges.push({
+        parentTable: tableName,
+        relationName: rel.name,
+        childTable,
+        parentKey: relation.source,
+        childKey: relation.to || "id",
+        select: rel.select,
+        _count: rel._count,
+        relations: rel.relations,
+        mode
+      });
+      walk(childTable, rel.relations);
+    }
+  };
+
+  walk(ast.root, ast.relations);
+
+  return {
+    root: ast.root,
+    rootSelect: ast.select,
+    rootWhere: ast.where,
+    rootOrderBy: ast.orderBy,
+    rootTake: ast.take,
+    rootSkip: ast.skip,
+    edges
+  };
+}
+
 function shouldUseMultiQuery(ast: QueryAST, schema: Schema): boolean {
   const depth = (relations: RelationAST[]): number => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
   if (ast._count) return false;
@@ -240,12 +305,36 @@ async function hydrateLayer(
   }));
 }
 
+async function hydratePlan(
+  plan: ExecutionPlan,
+  rows: Row[],
+  schema: Schema,
+  options: MultiOptions,
+  path: string[],
+  cache: Map<CacheKey, Promise<Row[]>>
+) {
+  const groupedEdges = new Map<string, ExecutionEdge[]>();
+  for (const edge of plan.edges) {
+    const list = groupedEdges.get(edge.parentTable) || [];
+    list.push(edge);
+    groupedEdges.set(edge.parentTable, list);
+  }
+  const rootEdges = groupedEdges.get(plan.root) || [];
+  await hydrateLayer(plan.root, rows, rootEdges.map((edge) => ({
+    name: edge.relationName,
+    _count: edge._count,
+    select: edge.select,
+    relations: edge.relations
+  })), schema, options, path, cache);
+}
+
 export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: MultiOptions, resolvedUrl?: string) {
   const { sql, values } = buildRootSql(ast, schema);
   const rootRows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
   const rows = rootRows.map((row) => normalizeRoot(row, ast.select));
   const cache = new Map<CacheKey, Promise<Row[]>>();
-  await hydrateLayer(ast.root, rows, ast.relations, schema, options, [ast.root], cache);
+  const plan = buildExecutionPlan(ast, schema);
+  await hydratePlan(plan, rows, schema, options, [ast.root], cache);
   return { rootRows: rows, sql, values };
 }
 

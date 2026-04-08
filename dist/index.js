@@ -426,6 +426,40 @@ function relationShapeNeedsBatch(rel, schema, parentTable) {
   if (!relation) return false;
   return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
 }
+function buildExecutionPlan(ast, schema) {
+  const edges = [];
+  const walk = (tableName, relations) => {
+    const tableSchema = schema[tableName] || {};
+    for (const rel of relations) {
+      const relation = getRelation(tableSchema, rel.name);
+      if (!relation) continue;
+      const childTable = relation.table;
+      const mode = rel._count && !rel.select && rel.relations.length === 0 ? "count" : relation.source === "id" && relation.to === "id" && rel.relations.length === 0 ? "single" : "many";
+      edges.push({
+        parentTable: tableName,
+        relationName: rel.name,
+        childTable,
+        parentKey: relation.source,
+        childKey: relation.to || "id",
+        select: rel.select,
+        _count: rel._count,
+        relations: rel.relations,
+        mode
+      });
+      walk(childTable, rel.relations);
+    }
+  };
+  walk(ast.root, ast.relations);
+  return {
+    root: ast.root,
+    rootSelect: ast.select,
+    rootWhere: ast.where,
+    rootOrderBy: ast.orderBy,
+    rootTake: ast.take,
+    rootSkip: ast.skip,
+    edges
+  };
+}
 function shouldUseMultiQuery(ast, schema) {
   const depth = (relations) => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
   if (ast._count) return false;
@@ -497,12 +531,28 @@ async function hydrateLayer(tableName, rows, relations, schema, options, path, c
     }
   }));
 }
+async function hydratePlan(plan, rows, schema, options, path, cache) {
+  const groupedEdges = /* @__PURE__ */ new Map();
+  for (const edge of plan.edges) {
+    const list = groupedEdges.get(edge.parentTable) || [];
+    list.push(edge);
+    groupedEdges.set(edge.parentTable, list);
+  }
+  const rootEdges = groupedEdges.get(plan.root) || [];
+  await hydrateLayer(plan.root, rows, rootEdges.map((edge) => ({
+    name: edge.relationName,
+    _count: edge._count,
+    select: edge.select,
+    relations: edge.relations
+  })), schema, options, path, cache);
+}
 async function executeMultiQuery(ast, schema, options, resolvedUrl) {
   const { sql, values } = buildRootSql(ast, schema);
   const rootRows = await runQuery(sql, values, resolvedUrl, options.client);
   const rows = rootRows.map((row) => normalizeRoot(row, ast.select));
   const cache = /* @__PURE__ */ new Map();
-  await hydrateLayer(ast.root, rows, ast.relations, schema, options, [ast.root], cache);
+  const plan = buildExecutionPlan(ast, schema);
+  await hydratePlan(plan, rows, schema, options, [ast.root], cache);
   return { rootRows: rows, sql, values };
 }
 

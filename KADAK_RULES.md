@@ -30,6 +30,18 @@ These rules define how Kadak should evolve in this repo.
 - Prefer explicit internal strategy changes over magical behavior.
 - Do not change public API shape unless strictly required for correctness.
 
+## Execution Rewrite Rules
+- Use a staged execution plan, not branch-by-branch recursion.
+- Batch relation loading by layer.
+- Cache repeated table/path/value-set fetches within one query execution.
+- Keep internal identity fields available until the final projection step.
+- Separate hydration identity from user-visible projection.
+- Parallelize independent sibling relation loads when safe.
+- Stop refetching the same subgraph through cycles.
+- Keep single-query execution only for simple shallow graphs.
+- Use multi-query execution for deep graphs and reverse-heavy graphs.
+- Keep result shaping deterministic and stable across repeated runs.
+
 ## Scope Rules
 - Stay PostgreSQL-first.
 - Do not expand into a full application framework.
@@ -46,3 +58,5 @@ These rules define how Kadak should evolve in this repo.
 - Treat this file as binding product guidance.
 - If a change conflicts with these rules, it must be justified as necessary for correctness, stability, or essential DX.
 
+## Rewrite Acceptance Rule
+- Do not consider the engine rewrite complete until live benchmark runs show materially lower latency on deep and reverse-heavy queries and correctness remains stable.
