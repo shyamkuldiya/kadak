@@ -32,6 +32,7 @@ type PreparedPlan = {
   sql: string;
   values: unknown[];
   edges: ExecutionEdge[];
+  edgesByParent: Record<string, ExecutionEdge[]>;
   useMulti: boolean;
 };
 
@@ -147,6 +148,19 @@ function collectEdges(astRoot: string, relations: RelationAST[], schema: Runtime
   return edges;
 }
 
+function groupEdges(edges: ExecutionEdge[]) {
+  const grouped: Record<string, ExecutionEdge[]> = {};
+  for (const edge of edges) {
+    const list = grouped[edge.parentTable] || [];
+    list.push(edge);
+    grouped[edge.parentTable] = list;
+  }
+  for (const key of Object.keys(grouped)) {
+    grouped[key] = grouped[key].slice().sort((a, b) => a.relationName.localeCompare(b.relationName));
+  }
+  return grouped;
+}
+
 function prepareExecution(ast: QueryAST, schema: RuntimeSchema, schemaSignatureValue: string): PreparedPlan {
   const cacheKey = `${schemaSignatureValue}::${ast.shapeKey || ast.root}`;
   const cached = planCache.get(cacheKey);
@@ -163,7 +177,7 @@ function prepareExecution(ast: QueryAST, schema: RuntimeSchema, schemaSignatureV
         return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
       }));
 
-  const prepared = { ...root, edges, useMulti };
+  const prepared = { ...root, edges, edgesByParent: groupEdges(edges), useMulti };
   if (planCache.size >= PLAN_CACHE_LIMIT) {
     const first = planCache.keys().next().value as string | undefined;
     if (first) planCache.delete(first);
@@ -254,15 +268,6 @@ export async function executeEngine(ast: QueryAST, schema: RuntimeSchema, option
   const cache = new Map<CacheKey, Promise<Row[]>>();
   const frontier = new Map<string, Row[]>();
   frontier.set(ast.root, rootRows);
-  const grouped = new Map<string, ExecutionEdge[]>();
-  for (const edge of plan.edges) {
-    const list = grouped.get(edge.parentTable) || [];
-    list.push(edge);
-    grouped.set(edge.parentTable, list);
-  }
-  for (const [tableName, rels] of grouped.entries()) {
-    grouped.set(tableName, rels.slice().sort((a, b) => a.relationName.localeCompare(b.relationName)));
-  }
 
   const seen = new Set<string>();
   const maxPasses = Math.max(1, plan.edges.length + 1);
@@ -273,7 +278,7 @@ export async function executeEngine(ast: QueryAST, schema: RuntimeSchema, option
     frontier.clear();
 
     for (const [tableName, rows] of active) {
-      const rels = grouped.get(tableName) || [];
+      const rels = plan.edgesByParent[tableName] || [];
       for (const edge of rels) {
         const key = `${tableName}:${edge.relationName}`;
         if (seen.has(key)) continue;

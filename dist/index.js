@@ -4,9 +4,11 @@ function buildAST(queryInput) {
   const rootValue = queryInput[rootKey];
   const { where, relations, orderBy, select, take, skip, _count } = parseNode(rootValue, true);
   const shapeKey = buildShapeKey(rootKey, rootValue);
+  const rootSelectKeys = rootValue.select ? Object.keys(rootValue.select).filter((key) => key !== "id") : void 0;
   return {
     root: rootKey,
     shapeKey,
+    rootSelectKeys,
     _count,
     select,
     take,
@@ -423,6 +425,18 @@ function collectEdges(astRoot, relations, schema) {
   }
   return edges;
 }
+function groupEdges(edges) {
+  const grouped = {};
+  for (const edge of edges) {
+    const list = grouped[edge.parentTable] || [];
+    list.push(edge);
+    grouped[edge.parentTable] = list;
+  }
+  for (const key of Object.keys(grouped)) {
+    grouped[key] = grouped[key].slice().sort((a, b) => a.relationName.localeCompare(b.relationName));
+  }
+  return grouped;
+}
 function prepareExecution(ast, schema, schemaSignatureValue) {
   const cacheKey = `${schemaSignatureValue}::${ast.shapeKey || ast.root}`;
   const cached = planCache.get(cacheKey);
@@ -434,7 +448,7 @@ function prepareExecution(ast, schema, schemaSignatureValue) {
     if (!relation) return false;
     return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
   }));
-  const prepared = { ...root, edges, useMulti };
+  const prepared = { ...root, edges, edgesByParent: groupEdges(edges), useMulti };
   if (planCache.size >= PLAN_CACHE_LIMIT) {
     const first = planCache.keys().next().value;
     if (first) planCache.delete(first);
@@ -507,15 +521,6 @@ async function executeEngine(ast, schema, options, resolvedUrl, schemaSignatureV
   const cache = /* @__PURE__ */ new Map();
   const frontier = /* @__PURE__ */ new Map();
   frontier.set(ast.root, rootRows);
-  const grouped = /* @__PURE__ */ new Map();
-  for (const edge of plan.edges) {
-    const list = grouped.get(edge.parentTable) || [];
-    list.push(edge);
-    grouped.set(edge.parentTable, list);
-  }
-  for (const [tableName, rels] of grouped.entries()) {
-    grouped.set(tableName, rels.slice().sort((a, b) => a.relationName.localeCompare(b.relationName)));
-  }
   const seen = /* @__PURE__ */ new Set();
   const maxPasses = Math.max(1, plan.edges.length + 1);
   for (let pass = 0; pass < maxPasses; pass++) {
@@ -523,7 +528,7 @@ async function executeEngine(ast, schema, options, resolvedUrl, schemaSignatureV
     const active = Array.from(frontier.entries()).sort(([a], [b]) => a.localeCompare(b));
     frontier.clear();
     for (const [tableName, rows] of active) {
-      const rels = grouped.get(tableName) || [];
+      const rels = plan.edgesByParent[tableName] || [];
       for (const edge of rels) {
         const key = `${tableName}:${edge.relationName}`;
         if (seen.has(key)) continue;
