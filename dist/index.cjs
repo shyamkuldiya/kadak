@@ -367,33 +367,37 @@ function quote(field) {
 function unique(arr) {
   return Array.from(new Set(arr));
 }
-function isRelationEntry(entry) {
-  return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
-}
-function getRelation(tableSchema, relName) {
-  const entry = tableSchema[relName];
-  if (isRelationEntry(entry)) return entry;
-  if (typeof entry === "string" && entry.includes(".")) {
-    const [table, to] = entry.split(".");
-    return { table, as: relName, to: to || "id", source: "id" };
-  }
-  return void 0;
-}
-function tableFields(tableSchema) {
-  return Object.keys(tableSchema).filter((field) => {
-    if (field === "id") return false;
-    const entry = tableSchema[field];
-    if (isRelationEntry(entry)) return false;
-    if (typeof entry === "string" && entry.includes(".")) return false;
-    return true;
-  });
-}
 function valuesKey(values) {
   return values.map((value) => value === null ? "__null__" : typeof value === "object" ? JSON.stringify(value) : String(value)).join("|");
 }
+function isRelationEntry(entry) {
+  return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
+}
+function compileRuntimeSchema(raw) {
+  const compiled = {};
+  for (const [tableName, tableSchema] of Object.entries(raw)) {
+    const fields = [];
+    const relations = {};
+    for (const [field, entry] of Object.entries(tableSchema)) {
+      if (field === "id") continue;
+      if (isRelationEntry(entry)) {
+        relations[field] = entry;
+        continue;
+      }
+      if (typeof entry === "string" && entry.includes(".")) {
+        const [table, to] = entry.split(".");
+        relations[field] = { table, as: field, to: to || "id", source: "id" };
+        continue;
+      }
+      fields.push(field);
+    }
+    compiled[tableName] = { fields, relations };
+  }
+  return compiled;
+}
 function buildRootSql(ast, schema) {
-  const rootSchema = schema[ast.root] || {};
-  const fields = ast.select ? Object.keys(ast.select).filter((field) => field !== "id") : tableFields(rootSchema);
+  const rootSchema = schema[ast.root] || { fields: [], relations: {} };
+  const fields = ast.select ? Object.keys(ast.select).filter((field) => field !== "id") : rootSchema.fields;
   const cols = unique(["id", ...fields]).map(quote);
   const values = [];
   let sql = `SELECT ${cols.join(", ")} FROM ${ast.root}`;
@@ -411,14 +415,14 @@ function buildRootSql(ast, schema) {
   if (ast.skip !== void 0) sql += ` OFFSET ${ast.skip}`;
   return { sql, values };
 }
-function buildRelationMap(ast, schema) {
+function collectEdges(astRoot, relations, schema) {
   const edges = [];
-  const queue = [{ tableName: ast.root, relations: ast.relations }];
+  const queue = [{ tableName: astRoot, relations }];
   for (let cursor = 0; cursor < queue.length; cursor++) {
-    const { tableName, relations } = queue[cursor];
-    const tableSchema = schema[tableName] || {};
-    for (const rel of relations) {
-      const relation = getRelation(tableSchema, rel.name);
+    const { tableName, relations: relations2 } = queue[cursor];
+    const tableSchema = schema[tableName] || { fields: [], relations: {} };
+    for (const rel of relations2) {
+      const relation = tableSchema.relations[rel.name];
       if (!relation) continue;
       edges.push({
         parentTable: tableName,
@@ -433,13 +437,7 @@ function buildRelationMap(ast, schema) {
       if (rel.relations.length > 0) queue.push({ tableName: relation.table, relations: rel.relations });
     }
   }
-  const depth = (relations) => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
-  const useMulti = ast._count ? false : depth(ast.relations) > 1 || ast.relations.some((rel) => {
-    const relation = getRelation(schema[ast.root] || {}, rel.name);
-    if (!relation) return false;
-    return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
-  });
-  return { root: ast.root, edges, useMulti };
+  return edges;
 }
 function parentKeys(rows, field) {
   return unique(rows.map((row) => row[field]).filter((value) => value !== null && value !== void 0));
@@ -476,8 +474,8 @@ function bucket(rows, keyField, select) {
 async function fetchMany(table, field, values, schema, select, client, cache) {
   const key = `${table}:${field}:${select ? Object.keys(select).sort().join(",") : "*"}:${valuesKey(values)}`;
   if (cache?.has(key)) return await cache.get(key);
-  const tableSchema = schema[table] || {};
-  const fields = select ? Object.keys(select).filter((field2) => field2 !== "id") : tableFields(tableSchema);
+  const tableSchema = schema[table] || { fields: [], relations: {} };
+  const fields = select ? Object.keys(select).filter((field2) => field2 !== "id") : tableSchema.fields;
   const cols = unique(["id", ...fields]).map(quote);
   const placeholders = values.map((_, index) => `$${index + 1}`);
   const sql = `SELECT ${cols.join(", ")} FROM ${table} WHERE ${quote(field)} IN (${placeholders.join(", ")})`;
@@ -496,31 +494,39 @@ async function executeEngine(ast, schema, options, resolvedUrl) {
   if (!ast.relations || ast.relations.length === 0) {
     return { rootRows, sql, values };
   }
-  const plan = buildRelationMap(ast, schema);
-  if (!plan.useMulti || plan.edges.length === 0) {
+  const edges = collectEdges(ast.root, ast.relations, schema);
+  if (edges.length === 0) {
+    return { rootRows, sql, values };
+  }
+  const useMulti = ast.relations.length > 1 || ast.relations.some((rel) => {
+    const relation = schema[ast.root]?.relations?.[rel.name];
+    if (!relation) return false;
+    return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
+  });
+  if (!useMulti) {
     return { rootRows, sql, values };
   }
   const cache = /* @__PURE__ */ new Map();
   const frontier = /* @__PURE__ */ new Map();
-  frontier.set(plan.root, rootRows);
+  frontier.set(ast.root, rootRows);
   const grouped = /* @__PURE__ */ new Map();
-  for (const edge of plan.edges) {
+  for (const edge of edges) {
     const list = grouped.get(edge.parentTable) || [];
     list.push(edge);
     grouped.set(edge.parentTable, list);
   }
-  for (const [tableName, edges] of grouped.entries()) {
-    grouped.set(tableName, edges.slice().sort((a, b) => a.relationName.localeCompare(b.relationName)));
+  for (const [tableName, rels] of grouped.entries()) {
+    grouped.set(tableName, rels.slice().sort((a, b) => a.relationName.localeCompare(b.relationName)));
   }
   const seen = /* @__PURE__ */ new Set();
-  const maxPasses = Math.max(1, plan.edges.length + 1);
+  const maxPasses = Math.max(1, edges.length + 1);
   for (let pass = 0; pass < maxPasses; pass++) {
     let progressed = false;
     const active = Array.from(frontier.entries()).sort(([a], [b]) => a.localeCompare(b));
     frontier.clear();
     for (const [tableName, rows] of active) {
-      const edges = grouped.get(tableName) || [];
-      for (const edge of edges) {
+      const rels = grouped.get(tableName) || [];
+      for (const edge of rels) {
         const key = `${tableName}:${edge.relationName}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -978,6 +984,7 @@ async function pushSchema(definition, url) {
 // src/index.ts
 var kadak = ((config) => {
   let _currentSchema = {};
+  let _runtimeSchema = {};
   let _rawDefinition = {};
   const _url = config.url;
   const data = ((input, options = {}) => {
@@ -995,7 +1002,7 @@ var kadak = ((config) => {
     };
     const execution = async () => {
       try {
-        const engine = await executeEngine(ast, _currentSchema, options, resolvedUrl);
+        const engine = await executeEngine(ast, _runtimeSchema, options, resolvedUrl);
         if (options.debug) {
           const trace = getTrace();
           return { sql: trace.sql, values: trace.values, rows: engine.rootRows, data: engine.rootRows };
@@ -1084,6 +1091,7 @@ var kadak = ((config) => {
           }
         }
       }
+      _runtimeSchema = compileRuntimeSchema(_currentSchema);
       return dbClient;
     }),
     async push() {

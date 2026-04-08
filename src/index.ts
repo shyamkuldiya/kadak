@@ -3,7 +3,7 @@ import { buildPlan } from "./query/planner.js";
 import { compileSQL } from "./query/compiler.js";
 import { runQuery, closePool, getTransactionClient } from "./exec/client.js";
 import { normalize } from "./exec/normalize.js";
-import { executeEngine } from "./exec/engine.js";
+import { compileRuntimeSchema, executeEngine } from "./exec/engine.js";
 import { buildInsertSQL, buildUpdateSQL, buildDeleteSQL } from "./exec/mutations.js";
 import { validateInput } from "./schema/validator.js";
 import { pushSchema, Table, TableConfig, SchemaDefinition, ColumnObject, ColumnBuilder, Column, InferColumns, types } from "./schema/migrator.js";
@@ -181,6 +181,7 @@ export interface KadakFactory {
 
 export const kadak = ((config: KadakConfig): KadakInstance => {
   let _currentSchema: Record<string, Record<string, SchemaEntry>> = {};
+  let _runtimeSchema: ReturnType<typeof compileRuntimeSchema> = {};
   let _rawDefinition: SchemaDefinition = {};
   const _url = config.url;
 
@@ -200,7 +201,7 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
     
     const execution = async () => {
       try {
-        const engine = await executeEngine(ast, _currentSchema, options, resolvedUrl);
+        const engine = await executeEngine(ast, _runtimeSchema, options, resolvedUrl);
         if (options.debug) {
           const trace = getTrace();
           return { sql: trace.sql, values: trace.values, rows: engine.rootRows, data: engine.rootRows };
@@ -296,6 +297,7 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
           }
         }
       }
+      _runtimeSchema = compileRuntimeSchema(_currentSchema);
       return dbClient as unknown as KadakInstance<DefinedSchema<Tables>, RelationGraph<Tables>>;
     }) as KadakInstance["define"],
 

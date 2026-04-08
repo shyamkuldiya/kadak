@@ -2,8 +2,15 @@ import pg from "pg";
 import { QueryAST, RelationAST } from "../query/ast.js";
 import { runQuery } from "./client.js";
 
-export type SchemaEntry = string | { table: string; as: string; to: string; source: string } | Record<string, unknown>;
-export type Schema = Record<string, Record<string, SchemaEntry>>;
+export type SchemaEntry =
+  | string
+  | { table: string; as: string; to: string; source: string }
+  | Record<string, unknown>;
+
+export type RuntimeRelation = { table: string; as: string; to: string; source: string };
+export type RuntimeTable = { fields: string[]; relations: Record<string, RuntimeRelation> };
+export type RuntimeSchema = Record<string, RuntimeTable>;
+export type RawSchema = Record<string, Record<string, SchemaEntry>>;
 
 export type ExecutionEdge = {
   parentTable: string;
@@ -14,12 +21,6 @@ export type ExecutionEdge = {
   select?: Record<string, true>;
   _count?: boolean;
   relations: RelationAST[];
-};
-
-export type ExecutionPlan = {
-  root: QueryAST["root"];
-  edges: ExecutionEdge[];
-  useMulti: boolean;
 };
 
 type Row = Record<string, unknown>;
@@ -34,37 +35,46 @@ function unique<T>(arr: T[]): T[] {
   return Array.from(new Set(arr));
 }
 
-function isRelationEntry(entry: SchemaEntry | undefined): entry is { table: string; as: string; to: string; source: string } {
+function valuesKey(values: unknown[]) {
+  return values
+    .map((value) => (value === null ? "__null__" : typeof value === "object" ? JSON.stringify(value) : String(value)))
+    .join("|");
+}
+
+function isRelationEntry(entry: SchemaEntry | undefined): entry is RuntimeRelation {
   return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
 }
 
-function getRelation(tableSchema: Record<string, SchemaEntry>, relName: string) {
-  const entry = tableSchema[relName];
-  if (isRelationEntry(entry)) return entry;
-  if (typeof entry === "string" && entry.includes(".")) {
-    const [table, to] = entry.split(".");
-    return { table, as: relName, to: to || "id", source: "id" };
+export function compileRuntimeSchema(raw: RawSchema): RuntimeSchema {
+  const compiled: RuntimeSchema = {};
+
+  for (const [tableName, tableSchema] of Object.entries(raw)) {
+    const fields: string[] = [];
+    const relations: Record<string, RuntimeRelation> = {};
+
+    for (const [field, entry] of Object.entries(tableSchema)) {
+      if (field === "id") continue;
+      if (isRelationEntry(entry)) {
+        relations[field] = entry;
+        continue;
+      }
+      if (typeof entry === "string" && entry.includes(".")) {
+        const [table, to] = entry.split(".");
+        relations[field] = { table, as: field, to: to || "id", source: "id" };
+        continue;
+      }
+      fields.push(field);
+    }
+
+    compiled[tableName] = { fields, relations };
   }
-  return undefined;
+
+  return compiled;
 }
 
-function tableFields(tableSchema: Record<string, SchemaEntry>): string[] {
-  return Object.keys(tableSchema).filter((field) => {
-    if (field === "id") return false;
-    const entry = tableSchema[field];
-    if (isRelationEntry(entry)) return false;
-    if (typeof entry === "string" && entry.includes(".")) return false;
-    return true;
-  });
-}
-
-function valuesKey(values: unknown[]) {
-  return values.map((value) => value === null ? "__null__" : typeof value === "object" ? JSON.stringify(value) : String(value)).join("|");
-}
-
-function buildRootSql(ast: QueryAST, schema: Schema) {
-  const rootSchema = schema[ast.root] || {};
-  const fields = ast.select ? Object.keys(ast.select).filter((field) => field !== "id") : tableFields(rootSchema);
+function buildRootSql(ast: QueryAST, schema: RuntimeSchema) {
+  const rootSchema = schema[ast.root] || { fields: [], relations: {} };
+  const fields = ast.select ? Object.keys(ast.select).filter((field) => field !== "id") : rootSchema.fields;
   const cols = unique(["id", ...fields]).map(quote);
   const values: unknown[] = [];
   let sql = `SELECT ${cols.join(", ")} FROM ${ast.root}`;
@@ -86,15 +96,16 @@ function buildRootSql(ast: QueryAST, schema: Schema) {
   return { sql, values };
 }
 
-function buildRelationMap(ast: QueryAST, schema: Schema) {
+function collectEdges(astRoot: string, relations: RelationAST[], schema: RuntimeSchema) {
   const edges: ExecutionEdge[] = [];
-  const queue: Array<{ tableName: string; relations: RelationAST[] }> = [{ tableName: ast.root, relations: ast.relations }];
+  const queue: Array<{ tableName: string; relations: RelationAST[] }> = [{ tableName: astRoot, relations }];
 
   for (let cursor = 0; cursor < queue.length; cursor++) {
     const { tableName, relations } = queue[cursor];
-    const tableSchema = schema[tableName] || {};
+    const tableSchema = schema[tableName] || { fields: [], relations: {} };
+
     for (const rel of relations) {
-      const relation = getRelation(tableSchema, rel.name);
+      const relation = tableSchema.relations[rel.name];
       if (!relation) continue;
       edges.push({
         parentTable: tableName,
@@ -110,14 +121,7 @@ function buildRelationMap(ast: QueryAST, schema: Schema) {
     }
   }
 
-  const depth = (relations: RelationAST[]): number => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
-  const useMulti = ast._count ? false : depth(ast.relations) > 1 || ast.relations.some((rel) => {
-    const relation = getRelation(schema[ast.root] || {}, rel.name);
-    if (!relation) return false;
-    return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
-  });
-
-  return { root: ast.root, edges, useMulti } satisfies ExecutionPlan;
+  return edges;
 }
 
 function parentKeys(rows: Row[], field: string) {
@@ -155,11 +159,19 @@ function bucket(rows: Row[], keyField: string, select?: Record<string, true>) {
   return { many, one };
 }
 
-async function fetchMany(table: string, field: string, values: unknown[], schema: Schema, select?: Record<string, true>, client?: pg.PoolClient, cache?: Map<CacheKey, Promise<Row[]>>) {
+async function fetchMany(
+  table: string,
+  field: string,
+  values: unknown[],
+  schema: RuntimeSchema,
+  select?: Record<string, true>,
+  client?: pg.PoolClient,
+  cache?: Map<CacheKey, Promise<Row[]>>
+) {
   const key = `${table}:${field}:${select ? Object.keys(select).sort().join(",") : "*"}:${valuesKey(values)}`;
   if (cache?.has(key)) return await cache.get(key)!;
-  const tableSchema = schema[table] || {};
-  const fields = select ? Object.keys(select).filter((field) => field !== "id") : tableFields(tableSchema);
+  const tableSchema = schema[table] || { fields: [], relations: {} };
+  const fields = select ? Object.keys(select).filter((field) => field !== "id") : tableSchema.fields;
   const cols = unique(["id", ...fields]).map(quote);
   const placeholders = values.map((_, index) => `$${index + 1}`);
   const sql = `SELECT ${cols.join(", ")} FROM ${table} WHERE ${quote(field)} IN (${placeholders.join(", ")})`;
@@ -168,7 +180,7 @@ async function fetchMany(table: string, field: string, values: unknown[], schema
   return await query;
 }
 
-export async function executeEngine(ast: QueryAST, schema: Schema, options: EngineOptions, resolvedUrl?: string) {
+export async function executeEngine(ast: QueryAST, schema: RuntimeSchema, options: EngineOptions, resolvedUrl?: string) {
   const { sql, values } = buildRootSql(ast, schema);
   const rootRows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
 
@@ -182,26 +194,38 @@ export async function executeEngine(ast: QueryAST, schema: Schema, options: Engi
     return { rootRows, sql, values };
   }
 
-  const plan = buildRelationMap(ast, schema);
-  if (!plan.useMulti || plan.edges.length === 0) {
+  const edges = collectEdges(ast.root, ast.relations, schema);
+  if (edges.length === 0) {
+    return { rootRows, sql, values };
+  }
+
+  const useMulti =
+    ast.relations.length > 1 ||
+    ast.relations.some((rel) => {
+      const relation = schema[ast.root]?.relations?.[rel.name];
+      if (!relation) return false;
+      return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
+    });
+
+  if (!useMulti) {
     return { rootRows, sql, values };
   }
 
   const cache = new Map<CacheKey, Promise<Row[]>>();
   const frontier = new Map<string, Row[]>();
-  frontier.set(plan.root, rootRows);
+  frontier.set(ast.root, rootRows);
   const grouped = new Map<string, ExecutionEdge[]>();
-  for (const edge of plan.edges) {
+  for (const edge of edges) {
     const list = grouped.get(edge.parentTable) || [];
     list.push(edge);
     grouped.set(edge.parentTable, list);
   }
-  for (const [tableName, edges] of grouped.entries()) {
-    grouped.set(tableName, edges.slice().sort((a, b) => a.relationName.localeCompare(b.relationName)));
+  for (const [tableName, rels] of grouped.entries()) {
+    grouped.set(tableName, rels.slice().sort((a, b) => a.relationName.localeCompare(b.relationName)));
   }
 
   const seen = new Set<string>();
-  const maxPasses = Math.max(1, plan.edges.length + 1);
+  const maxPasses = Math.max(1, edges.length + 1);
 
   for (let pass = 0; pass < maxPasses; pass++) {
     let progressed = false;
@@ -209,15 +233,15 @@ export async function executeEngine(ast: QueryAST, schema: Schema, options: Engi
     frontier.clear();
 
     for (const [tableName, rows] of active) {
-      const edges = grouped.get(tableName) || [];
-      for (const edge of edges) {
+      const rels = grouped.get(tableName) || [];
+      for (const edge of rels) {
         const key = `${tableName}:${edge.relationName}`;
         if (seen.has(key)) continue;
         seen.add(key);
 
         const values = parentKeys(rows, edge.parentKey);
         if (values.length === 0) {
-          for (const row of rows) row[edge.relationName] = edge._count ? { _count: 0 } : (edge.childKey === "id" ? null : []);
+          for (const row of rows) row[edge.relationName] = edge._count ? { _count: 0 } : edge.childKey === "id" ? null : [];
           continue;
         }
 
@@ -226,7 +250,7 @@ export async function executeEngine(ast: QueryAST, schema: Schema, options: Engi
         if (edge._count && !edge.select && edge.relations.length === 0) {
           const placeholders = values.map((_, index) => `$${index + 1}`);
           const sql = `SELECT ${quote(edge.childKey)} AS "__kadak_fk", COUNT(*) AS "__kadak_count" FROM ${edge.childTable} WHERE ${quote(edge.childKey)} IN (${placeholders.join(", ")}) GROUP BY ${quote(edge.childKey)}`;
-          const countRows = await runQuery(sql, values, undefined, options.client) as Row[];
+          const countRows = (await runQuery(sql, values, undefined, options.client)) as Row[];
           const counts = new Map<unknown, number>();
           for (const row of countRows) {
             const key = row.__kadak_fk;
