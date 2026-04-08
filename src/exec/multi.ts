@@ -248,8 +248,4 @@ export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: 
   return { rootRows: finalizeRows(rows, ast), sql, values };
 }
 
-export function buildMultiRootSql(ast: QueryAST, schema: Schema) {
-  return buildRootSql(ast, schema);
-}
-
 export { shouldUseMultiQuery };
