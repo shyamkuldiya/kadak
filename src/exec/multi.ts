@@ -217,10 +217,15 @@ async function hydratePlan(
   }
 }
 
-function finalizeRows(rows: Row[], ast: QueryAST): Row[] {
+export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: MultiOptions, resolvedUrl?: string) {
+  const { sql, values } = buildRootSql(ast, schema);
+  const rows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
+  const cache = new Map<CacheKey, Promise<Row[]>>();
+  const plan = buildExecutionPlan(ast, schema);
+  await hydratePlan(plan, rows, schema, options, cache);
   const select = ast.select;
-  if (!select) return rows;
-  return rows.map((row) => {
+  if (!select) return { rootRows: rows, sql, values };
+  const rootRows = rows.map((row) => {
     const out: Row = {};
     for (const [key, value] of Object.entries(row)) {
       if (key === "id") {
@@ -237,13 +242,5 @@ function finalizeRows(rows: Row[], ast: QueryAST): Row[] {
     }
     return out;
   });
-}
-
-export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: MultiOptions, resolvedUrl?: string) {
-  const { sql, values } = buildRootSql(ast, schema);
-  const rows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
-  const cache = new Map<CacheKey, Promise<Row[]>>();
-  const plan = buildExecutionPlan(ast, schema);
-  await hydratePlan(plan, rows, schema, options, cache);
-  return { rootRows: finalizeRows(rows, ast), sql, values };
+  return { rootRows, sql, values };
 }
