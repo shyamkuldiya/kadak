@@ -171,7 +171,6 @@ async function fetchMany(table: string, field: string, values: unknown[], schema
 export async function executeEngine(ast: QueryAST, schema: Schema, options: EngineOptions, resolvedUrl?: string) {
   const { sql, values } = buildRootSql(ast, schema);
   const rootRows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
-  const plan = buildRelationMap(ast, schema);
 
   if (ast._count) {
     const raw = rootRows[0]?._count ?? rootRows[0]?.count ?? rootRows[0]?.count_star;
@@ -179,6 +178,11 @@ export async function executeEngine(ast: QueryAST, schema: Schema, options: Engi
     return { rootRows: { [ast.root]: { _count: countValue } }, sql, values };
   }
 
+  if (!ast.relations || ast.relations.length === 0) {
+    return { rootRows, sql, values };
+  }
+
+  const plan = buildRelationMap(ast, schema);
   if (!plan.useMulti || plan.edges.length === 0) {
     return { rootRows, sql, values };
   }
