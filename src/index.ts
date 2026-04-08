@@ -181,7 +181,7 @@ export interface KadakFactory {
 
 export const kadak = ((config: KadakConfig): KadakInstance => {
   let _currentSchema: Record<string, Record<string, SchemaEntry>> = {};
-  let _runtimeSchema: ReturnType<typeof compileRuntimeSchema> = {};
+  let _runtimeSchema: ReturnType<typeof compileRuntimeSchema> = { tables: {}, signature: "" };
   let _rawDefinition: SchemaDefinition = {};
   const _url = config.url;
 
@@ -201,7 +201,7 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
     
     const execution = async () => {
       try {
-        const engine = await executeEngine(ast, _runtimeSchema, options, resolvedUrl);
+        const engine = await executeEngine(ast, _runtimeSchema.tables, options, resolvedUrl);
         if (options.debug) {
           const trace = getTrace();
           return { sql: trace.sql, values: trace.values, rows: engine.rootRows, data: engine.rootRows };

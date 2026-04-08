@@ -314,6 +314,8 @@ function processRelations(parentTable, parentObj, row, relations, schema) {
 }
 
 // src/exec/engine.ts
+var planCache = /* @__PURE__ */ new Map();
+var PLAN_CACHE_LIMIT = 250;
 function quote(field) {
   return `"${field}"`;
 }
@@ -327,7 +329,8 @@ function isRelationEntry(entry) {
   return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
 }
 function compileRuntimeSchema(raw) {
-  const compiled = {};
+  const tables = {};
+  const signatureParts = [];
   for (const [tableName, tableSchema] of Object.entries(raw)) {
     const fields = [];
     const relations = {};
@@ -344,9 +347,12 @@ function compileRuntimeSchema(raw) {
       }
       fields.push(field);
     }
-    compiled[tableName] = { fields, relations };
+    tables[tableName] = { fields, relations };
+    signatureParts.push(
+      `${tableName}:${fields.sort().join(",")}|${Object.entries(relations).sort(([a], [b]) => a.localeCompare(b)).map(([name, rel]) => `${name}>${rel.table}.${rel.source}.${rel.to}`).join(",")}`
+    );
   }
-  return compiled;
+  return { tables, signature: signatureParts.sort().join("||") };
 }
 function buildRootSql(ast, schema) {
   const rootSchema = schema[ast.root] || { fields: [], relations: {} };
@@ -367,6 +373,9 @@ function buildRootSql(ast, schema) {
   if (ast.take !== void 0) sql += ` LIMIT ${ast.take}`;
   if (ast.skip !== void 0) sql += ` OFFSET ${ast.skip}`;
   return { sql, values };
+}
+function astKey(ast) {
+  return JSON.stringify(ast);
 }
 function collectEdges(astRoot, relations, schema) {
   const edges = [];
@@ -391,6 +400,28 @@ function collectEdges(astRoot, relations, schema) {
     }
   }
   return edges;
+}
+function prepareExecution(ast, schema) {
+  const cacheKey = `${schemaSignature(schema)}::${astKey(ast)}`;
+  const cached = planCache.get(cacheKey);
+  if (cached) return cached;
+  const root = buildRootSql(ast, schema);
+  const edges = ast.relations && ast.relations.length > 0 ? collectEdges(ast.root, ast.relations, schema) : [];
+  const useMulti = edges.length > 0 && (ast.relations.length > 1 || ast.relations.some((rel) => {
+    const relation = schema[ast.root]?.relations?.[rel.name];
+    if (!relation) return false;
+    return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
+  }));
+  const prepared = { ...root, edges, useMulti };
+  if (planCache.size >= PLAN_CACHE_LIMIT) {
+    const first = planCache.keys().next().value;
+    if (first) planCache.delete(first);
+  }
+  planCache.set(cacheKey, prepared);
+  return prepared;
+}
+function schemaSignature(schema) {
+  return Object.entries(schema).sort(([a], [b]) => a.localeCompare(b)).map(([table, value]) => `${table}:${value.fields.slice().sort().join(",")}|${Object.entries(value.relations).sort(([a], [b]) => a.localeCompare(b)).map(([name, rel]) => `${name}>${rel.table}.${rel.source}.${rel.to}`).join(",")}`).join("||");
 }
 function parentKeys(rows, field) {
   return unique(rows.map((row) => row[field]).filter((value) => value !== null && value !== void 0));
@@ -437,7 +468,8 @@ async function fetchMany(table, field, values, schema, select, client, cache) {
   return await query;
 }
 async function executeEngine(ast, schema, options, resolvedUrl) {
-  const { sql, values } = buildRootSql(ast, schema);
+  const plan = prepareExecution(ast, schema);
+  const { sql, values } = plan;
   const rootRows = await runQuery(sql, values, resolvedUrl, options.client);
   if (ast._count) {
     const raw = rootRows[0]?._count ?? rootRows[0]?.count ?? rootRows[0]?.count_star;
@@ -447,23 +479,17 @@ async function executeEngine(ast, schema, options, resolvedUrl) {
   if (!ast.relations || ast.relations.length === 0) {
     return { rootRows, sql, values };
   }
-  const edges = collectEdges(ast.root, ast.relations, schema);
-  if (edges.length === 0) {
+  if (plan.edges.length === 0) {
     return { rootRows, sql, values };
   }
-  const useMulti = ast.relations.length > 1 || ast.relations.some((rel) => {
-    const relation = schema[ast.root]?.relations?.[rel.name];
-    if (!relation) return false;
-    return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
-  });
-  if (!useMulti) {
+  if (!plan.useMulti) {
     return { rootRows, sql, values };
   }
   const cache = /* @__PURE__ */ new Map();
   const frontier = /* @__PURE__ */ new Map();
   frontier.set(ast.root, rootRows);
   const grouped = /* @__PURE__ */ new Map();
-  for (const edge of edges) {
+  for (const edge of plan.edges) {
     const list = grouped.get(edge.parentTable) || [];
     list.push(edge);
     grouped.set(edge.parentTable, list);
@@ -472,7 +498,7 @@ async function executeEngine(ast, schema, options, resolvedUrl) {
     grouped.set(tableName, rels.slice().sort((a, b) => a.relationName.localeCompare(b.relationName)));
   }
   const seen = /* @__PURE__ */ new Set();
-  const maxPasses = Math.max(1, edges.length + 1);
+  const maxPasses = Math.max(1, plan.edges.length + 1);
   for (let pass = 0; pass < maxPasses; pass++) {
     let progressed = false;
     const active = Array.from(frontier.entries()).sort(([a], [b]) => a.localeCompare(b));
@@ -937,7 +963,7 @@ async function pushSchema(definition, url) {
 // src/index.ts
 var kadak = ((config) => {
   let _currentSchema = {};
-  let _runtimeSchema = {};
+  let _runtimeSchema = { tables: {}, signature: "" };
   let _rawDefinition = {};
   const _url = config.url;
   const data = ((input, options = {}) => {
@@ -955,7 +981,7 @@ var kadak = ((config) => {
     };
     const execution = async () => {
       try {
-        const engine = await executeEngine(ast, _runtimeSchema, options, resolvedUrl);
+        const engine = await executeEngine(ast, _runtimeSchema.tables, options, resolvedUrl);
         if (options.debug) {
           const trace = getTrace();
           return { sql: trace.sql, values: trace.values, rows: engine.rootRows, data: engine.rootRows };

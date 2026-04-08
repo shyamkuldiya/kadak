@@ -11,6 +11,7 @@ export type RuntimeRelation = { table: string; as: string; to: string; source: s
 export type RuntimeTable = { fields: string[]; relations: Record<string, RuntimeRelation> };
 export type RuntimeSchema = Record<string, RuntimeTable>;
 export type RawSchema = Record<string, Record<string, SchemaEntry>>;
+export type CompiledSchema = { tables: RuntimeSchema; signature: string };
 
 export type ExecutionEdge = {
   parentTable: string;
@@ -26,6 +27,15 @@ export type ExecutionEdge = {
 type Row = Record<string, unknown>;
 type CacheKey = string;
 type EngineOptions = { client?: pg.PoolClient; debug?: boolean };
+type PreparedPlan = {
+  sql: string;
+  values: unknown[];
+  edges: ExecutionEdge[];
+  useMulti: boolean;
+};
+
+const planCache = new Map<string, PreparedPlan>();
+const PLAN_CACHE_LIMIT = 250;
 
 function quote(field: string) {
   return `"${field}"`;
@@ -45,8 +55,9 @@ function isRelationEntry(entry: SchemaEntry | undefined): entry is RuntimeRelati
   return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
 }
 
-export function compileRuntimeSchema(raw: RawSchema): RuntimeSchema {
-  const compiled: RuntimeSchema = {};
+export function compileRuntimeSchema(raw: RawSchema): CompiledSchema {
+  const tables: RuntimeSchema = {};
+  const signatureParts: string[] = [];
 
   for (const [tableName, tableSchema] of Object.entries(raw)) {
     const fields: string[] = [];
@@ -66,10 +77,16 @@ export function compileRuntimeSchema(raw: RawSchema): RuntimeSchema {
       fields.push(field);
     }
 
-    compiled[tableName] = { fields, relations };
+    tables[tableName] = { fields, relations };
+    signatureParts.push(
+      `${tableName}:${fields.sort().join(",")}|${Object.entries(relations)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, rel]) => `${name}>${rel.table}.${rel.source}.${rel.to}`)
+        .join(",")}`
+    );
   }
 
-  return compiled;
+  return { tables, signature: signatureParts.sort().join("||") };
 }
 
 function buildRootSql(ast: QueryAST, schema: RuntimeSchema) {
@@ -94,6 +111,10 @@ function buildRootSql(ast: QueryAST, schema: RuntimeSchema) {
   if (ast.skip !== undefined) sql += ` OFFSET ${ast.skip}`;
 
   return { sql, values };
+}
+
+function astKey(ast: QueryAST) {
+  return JSON.stringify(ast);
 }
 
 function collectEdges(astRoot: string, relations: RelationAST[], schema: RuntimeSchema) {
@@ -122,6 +143,38 @@ function collectEdges(astRoot: string, relations: RelationAST[], schema: Runtime
   }
 
   return edges;
+}
+
+function prepareExecution(ast: QueryAST, schema: RuntimeSchema): PreparedPlan {
+  const cacheKey = `${schemaSignature(schema)}::${astKey(ast)}`;
+  const cached = planCache.get(cacheKey);
+  if (cached) return cached;
+
+  const root = buildRootSql(ast, schema);
+  const edges = ast.relations && ast.relations.length > 0 ? collectEdges(ast.root, ast.relations, schema) : [];
+  const useMulti =
+    edges.length > 0 &&
+    (ast.relations.length > 1 ||
+      ast.relations.some((rel) => {
+        const relation = schema[ast.root]?.relations?.[rel.name];
+        if (!relation) return false;
+        return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
+      }));
+
+  const prepared = { ...root, edges, useMulti };
+  if (planCache.size >= PLAN_CACHE_LIMIT) {
+    const first = planCache.keys().next().value as string | undefined;
+    if (first) planCache.delete(first);
+  }
+  planCache.set(cacheKey, prepared);
+  return prepared;
+}
+
+function schemaSignature(schema: RuntimeSchema) {
+  return Object.entries(schema)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([table, value]) => `${table}:${value.fields.slice().sort().join(",")}|${Object.entries(value.relations).sort(([a], [b]) => a.localeCompare(b)).map(([name, rel]) => `${name}>${rel.table}.${rel.source}.${rel.to}`).join(",")}`)
+    .join("||");
 }
 
 function parentKeys(rows: Row[], field: string) {
@@ -181,7 +234,8 @@ async function fetchMany(
 }
 
 export async function executeEngine(ast: QueryAST, schema: RuntimeSchema, options: EngineOptions, resolvedUrl?: string) {
-  const { sql, values } = buildRootSql(ast, schema);
+  const plan = prepareExecution(ast, schema);
+  const { sql, values } = plan;
   const rootRows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
 
   if (ast._count) {
@@ -194,20 +248,11 @@ export async function executeEngine(ast: QueryAST, schema: RuntimeSchema, option
     return { rootRows, sql, values };
   }
 
-  const edges = collectEdges(ast.root, ast.relations, schema);
-  if (edges.length === 0) {
+  if (plan.edges.length === 0) {
     return { rootRows, sql, values };
   }
 
-  const useMulti =
-    ast.relations.length > 1 ||
-    ast.relations.some((rel) => {
-      const relation = schema[ast.root]?.relations?.[rel.name];
-      if (!relation) return false;
-      return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
-    });
-
-  if (!useMulti) {
+  if (!plan.useMulti) {
     return { rootRows, sql, values };
   }
 
@@ -215,7 +260,7 @@ export async function executeEngine(ast: QueryAST, schema: RuntimeSchema, option
   const frontier = new Map<string, Row[]>();
   frontier.set(ast.root, rootRows);
   const grouped = new Map<string, ExecutionEdge[]>();
-  for (const edge of edges) {
+  for (const edge of plan.edges) {
     const list = grouped.get(edge.parentTable) || [];
     list.push(edge);
     grouped.set(edge.parentTable, list);
@@ -225,7 +270,7 @@ export async function executeEngine(ast: QueryAST, schema: RuntimeSchema, option
   }
 
   const seen = new Set<string>();
-  const maxPasses = Math.max(1, edges.length + 1);
+  const maxPasses = Math.max(1, plan.edges.length + 1);
 
   for (let pass = 0; pass < maxPasses; pass++) {
     let progressed = false;
