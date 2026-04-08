@@ -12,6 +12,14 @@ export function validateInput(input: Record<string, unknown>, schema: Record<str
   }
 
   const rootNode = input[rootTable] as Record<string, unknown>;
+  const hasCount = Object.prototype.hasOwnProperty.call(rootNode, "count") && Boolean((rootNode as Record<string, unknown>).count);
+  if (hasCount) {
+    for (const key of Object.keys(rootNode)) {
+      if (!["count", "where"].includes(key)) {
+        throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
+      }
+    }
+  }
   const hasPagination = Object.prototype.hasOwnProperty.call(rootNode, "take") || Object.prototype.hasOwnProperty.call(rootNode, "skip");
   if (hasPagination && !Object.prototype.hasOwnProperty.call(rootNode, "orderBy")) {
     throw new Error("Kadak Error: orderBy is required when using pagination");
@@ -35,6 +43,13 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
       }
     } else if (key === "limit" || key === "orderBy") {
        continue;
+    } else if (key === "count") {
+      if (value !== true) {
+        throw new Error("Kadak Error: count must be true");
+      }
+      if (!isRoot) {
+        throw new Error("Kadak Error: count is only supported at the root level");
+      }
     } else if (key === "take") {
       if (!isRoot) {
         throw new Error("Kadak Error: nested pagination is not supported yet");

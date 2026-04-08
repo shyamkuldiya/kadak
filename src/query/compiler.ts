@@ -12,6 +12,20 @@ export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Rec
   const values: unknown[] = [];
   const selections: string[] = [];
 
+  if (ast.count) {
+    let sql = `SELECT COUNT(*) AS "count" FROM ${plan.from}\n`;
+
+    if (plan.where && plan.where.length > 0) {
+      const whereClauses = plan.where.map(p => {
+        values.push(p.value);
+        return `${plan.from}."${p.field}" = $${values.length}`;
+      }).join(" AND ");
+      sql += `WHERE ${whereClauses}\n`;
+    }
+
+    return { text: sql.trim(), values };
+  }
+
   const addTableColumns = (tableName: string, alias?: string, select?: Record<string, true>) => {
     const tableId = alias || tableName;
     const tableSchema = schema[tableName] || {};

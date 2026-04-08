@@ -2,9 +2,10 @@
 function buildAST(queryInput) {
   const rootKey = Object.keys(queryInput)[0];
   const rootValue = queryInput[rootKey];
-  const { where, relations, orderBy, select, take, skip } = parseNode(rootValue, true);
+  const { where, relations, orderBy, select, take, skip, count } = parseNode(rootValue, true);
   return {
     root: rootKey,
+    count,
     select,
     take,
     skip,
@@ -20,6 +21,7 @@ function parseNode(input, isRoot) {
   let select;
   let take;
   let skip;
+  let count;
   for (const [key, value] of Object.entries(input)) {
     if (key === "where") {
       const whereObj = value;
@@ -32,21 +34,40 @@ function parseNode(input, isRoot) {
       const direction = orderObj[field].toLowerCase();
       orderBy = { field, direction };
     } else if (key === "select") {
+      if (input.count) {
+        throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
+      }
       select = {};
       for (const [field, enabled] of Object.entries(value)) {
         if (enabled) select[field] = true;
       }
+    } else if (key === "count") {
+      count = Boolean(value);
+      if (count) {
+        if (Object.keys(input).some((k) => !["count", "where"].includes(k))) {
+          throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
+        }
+      }
     } else if (key === "take") {
       if (!isRoot) {
         throw new Error("Kadak Error: nested pagination is not supported yet");
+      }
+      if (input.count) {
+        throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
       }
       take = Number(value);
     } else if (key === "skip") {
       if (!isRoot) {
         throw new Error("Kadak Error: nested pagination is not supported yet");
       }
+      if (input.count) {
+        throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
+      }
       skip = Number(value);
     } else if (value === true || typeof value === "object" && value !== null) {
+      if (input.count) {
+        throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
+      }
       const relationInput = value === true ? {} : value;
       const { relations: nestedRelations, select: nestedSelect } = parseNode(relationInput, false);
       relations.push({
@@ -56,7 +77,7 @@ function parseNode(input, isRoot) {
       });
     }
   }
-  return { where, relations, orderBy, select, take, skip };
+  return { where, relations, orderBy, select, take, skip, count };
 }
 
 // src/query/planner.ts
@@ -102,6 +123,19 @@ function findTable(id, plan) {
 function compileSQL(plan, ast, schema) {
   const values = [];
   const selections = [];
+  if (ast.count) {
+    let sql2 = `SELECT COUNT(*) AS "count" FROM ${plan.from}
+`;
+    if (plan.where && plan.where.length > 0) {
+      const whereClauses = plan.where.map((p) => {
+        values.push(p.value);
+        return `${plan.from}."${p.field}" = $${values.length}`;
+      }).join(" AND ");
+      sql2 += `WHERE ${whereClauses}
+`;
+    }
+    return { text: sql2.trim(), values };
+  }
   const addTableColumns = (tableName, alias, select) => {
     const tableId = alias || tableName;
     const tableSchema = schema[tableName] || {};
@@ -329,6 +363,14 @@ function validateInput(input, schema) {
     throw new Error(`\u274C Kadak Error: Table '${rootTable}' not found. ${suggestions}`);
   }
   const rootNode = input[rootTable];
+  const hasCount = Object.prototype.hasOwnProperty.call(rootNode, "count") && Boolean(rootNode.count);
+  if (hasCount) {
+    for (const key of Object.keys(rootNode)) {
+      if (!["count", "where"].includes(key)) {
+        throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
+      }
+    }
+  }
   const hasPagination = Object.prototype.hasOwnProperty.call(rootNode, "take") || Object.prototype.hasOwnProperty.call(rootNode, "skip");
   if (hasPagination && !Object.prototype.hasOwnProperty.call(rootNode, "orderBy")) {
     throw new Error("Kadak Error: orderBy is required when using pagination");
@@ -349,6 +391,13 @@ function validateNode(tableName, nodeInput, schema, isRoot = false) {
       }
     } else if (key === "limit" || key === "orderBy") {
       continue;
+    } else if (key === "count") {
+      if (value !== true) {
+        throw new Error("Kadak Error: count must be true");
+      }
+      if (!isRoot) {
+        throw new Error("Kadak Error: count is only supported at the root level");
+      }
     } else if (key === "take") {
       if (!isRoot) {
         throw new Error("Kadak Error: nested pagination is not supported yet");
@@ -641,6 +690,11 @@ var kadak = ((config) => {
         if (options.debug) console.error("\u274C Kadak Execution Error:", e.message);
         rows = [];
       }
+      if (ast.count) {
+        const raw = rows[0]?.count ?? rows[0]?.count_star ?? rows[0]?.count;
+        const countValue = typeof raw === "string" ? Number(raw) : Number(raw ?? 0);
+        return options.debug ? { sql, values, rows, data: { count: countValue } } : { count: countValue };
+      }
       const normalized = normalize(rows, ast, _currentSchema);
       return options.debug ? { sql, values, rows, data: normalized } : normalized;
     };
@@ -818,4 +872,3 @@ export {
   runQuery,
   types
 };
-//# sourceMappingURL=index.js.map

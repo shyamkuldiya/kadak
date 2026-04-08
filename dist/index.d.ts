@@ -117,6 +117,7 @@ type OrderBy = {
 };
 type QueryAST = {
     root: string;
+    count?: boolean;
     select?: Record<string, true>;
     take?: number;
     skip?: number;
@@ -264,6 +265,7 @@ type QueryNode<S extends SchemaMap, D extends Record<string, Record<string, stri
     [R in keyof D[TableName] & string]?: D[TableName][R] extends keyof S ? QueryNode<S, D, D[TableName][R]> | true : never;
 };
 type RootNode<S extends SchemaMap, D extends Record<string, Record<string, string>>, TableName extends keyof S & keyof D> = QueryNode<S, D, TableName> & {
+    count?: true;
     take?: number;
     skip?: number;
 };
@@ -317,7 +319,11 @@ interface KadakInstance<S extends SchemaMap = SchemaMap, D extends Record<string
     data<Q extends InferredQuery<S, D>>(input: Q, options?: {
         debug?: boolean;
         client?: pg.PoolClient;
-    }): KadakQuery<QueryResult<S, D, Q>>;
+    }): KadakQuery<Q[keyof Q & keyof S & keyof D] extends {
+        count: true;
+    } ? {
+        count: number;
+    } : QueryResult<S, D, Q>>;
     insert<T extends keyof S & string>(table: T, data: TableInsert<S, T>, options?: {
         client?: pg.PoolClient;
     }): Promise<unknown>;

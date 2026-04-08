@@ -13,6 +13,7 @@ export type OrderBy = {
 
 export type QueryAST = {
   root: string;
+  count?: boolean;
   select?: Record<string, true>;
   take?: number;
   skip?: number;
