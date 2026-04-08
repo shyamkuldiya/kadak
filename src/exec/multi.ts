@@ -247,5 +247,3 @@ export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: 
   await hydratePlan(plan, rows, schema, options, cache);
   return { rootRows: finalizeRows(rows, ast), sql, values };
 }
-
-export { shouldUseMultiQuery };
