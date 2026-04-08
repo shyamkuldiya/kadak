@@ -188,40 +188,52 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
     const resolvedUrl = _url || process.env.DATABASE_URL;
     validateInput(input, _currentSchema);
     const ast = buildAST(input);
-    const plan = buildPlan(ast, _currentSchema);
-    const { text: sql, values } = compileSQL(plan, ast, _currentSchema);
+    let traceCache: { plan: ReturnType<typeof buildPlan>; sql: string; values: unknown[] } | null = null;
+    const getTrace = () => {
+      if (!traceCache) {
+        const plan = buildPlan(ast, _currentSchema);
+        const compiled = compileSQL(plan, ast, _currentSchema);
+        traceCache = { plan, sql: compiled.text, values: compiled.values };
+      }
+      return traceCache;
+    };
     
     const execution = async () => {
-      let rows: Array<Record<string, unknown>> = [];
       try {
         const engine = await executeEngine(ast, _currentSchema, options, resolvedUrl);
-        rows = engine.rootRows as Array<Record<string, unknown>>;
         if (options.debug) {
-          return { sql: engine.sql, values: engine.values, rows, data: engine.rootRows };
+          const trace = getTrace();
+          return { sql: trace.sql, values: trace.values, rows: engine.rootRows, data: engine.rootRows };
         }
         return engine.rootRows as unknown;
-      } catch (e) {
-        if (options.debug) console.error("❌ Kadak Execution Error:", (e as Error).message);
-        rows = [];
+      } catch (error) {
+        if (ast._count) {
+          const countResult = { [ast.root]: { _count: 0 } };
+          if (options.debug) {
+            const trace = getTrace();
+            return { sql: trace.sql, values: trace.values, rows: [], data: countResult };
+          }
+          return countResult as unknown;
+        }
+        throw error;
       }
-      if (ast._count) {
-        const raw = rows[0]?._count ?? rows[0]?.count ?? rows[0]?.count_star;
-        const countValue = typeof raw === "string" ? Number(raw) : Number(raw ?? 0);
-        const countResult = { [ast.root]: { _count: countValue } };
-        return (options.debug ? { sql, values, rows, data: countResult } : countResult) as unknown;
-      }
-      const normalized = normalize(rows, ast, _currentSchema);
-      return (options.debug ? { sql, values, rows, data: normalized } : normalized) as unknown;
     };
 
     const promise = execution();
     const queryObj = promise as KadakQuery<unknown>;
-    queryObj.toSQL = () => ({ sql, values });
-    queryObj.explain = async () => {
-      const explainSql = `EXPLAIN ANALYZE ${sql}`;
-      return await runQuery(explainSql, values, resolvedUrl, options.client);
+    queryObj.toSQL = () => {
+      const trace = getTrace();
+      return { sql: trace.sql, values: trace.values };
     };
-    queryObj.trace = () => ({ ast, plan, sql, values });
+    queryObj.explain = async () => {
+      const trace = getTrace();
+      const explainSql = `EXPLAIN ANALYZE ${trace.sql}`;
+      return await runQuery(explainSql, trace.values, resolvedUrl, options.client);
+    };
+    queryObj.trace = () => {
+      const trace = getTrace();
+      return { ast, plan: trace.plan, sql: trace.sql, values: trace.values };
+    };
     return queryObj;
   }) as KadakInstance<SchemaMap, Record<string, never>>["data"];
 
