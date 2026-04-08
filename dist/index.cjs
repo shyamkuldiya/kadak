@@ -373,11 +373,6 @@ function getRelation(tableSchema, relName) {
   }
   return void 0;
 }
-function relationNeedsBatch(rel, schema, root) {
-  const relation = getRelation(schema[root] || {}, rel.name);
-  if (!relation) return false;
-  return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
-}
 function buildExecutionPlan(ast, schema) {
   const edges = [];
   const queue = [{ tableName: ast.root, relations: ast.relations }];
@@ -409,7 +404,11 @@ function shouldUseMultiQuery(ast, schema) {
   const depth = (relations) => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
   if (ast._count) return false;
   if (depth(ast.relations) > 1) return true;
-  return ast.relations.some((rel) => relationNeedsBatch(rel, schema, ast.root));
+  return ast.relations.some((rel) => {
+    const relation = getRelation(schema[ast.root] || {}, rel.name);
+    if (!relation) return false;
+    return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
+  });
 }
 
 // src/exec/multi.ts
