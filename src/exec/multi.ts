@@ -159,9 +159,9 @@ async function hydrateLayer(
   path: string[]
 ) {
   const tableSchema = schema[tableName] || {};
-  for (const rel of relations) {
+  await Promise.all(relations.map(async (rel) => {
     const relation = getRelation(tableSchema, rel.name);
-    if (!relation) continue;
+    if (!relation) return;
 
     const nextTable = relation.table;
     const parentKey = relation.source;
@@ -171,7 +171,7 @@ async function hydrateLayer(
       for (const row of rows) {
         row[rel.name] = rel._count ? { _count: 0 } : (childKey === "id" ? null : []);
       }
-      continue;
+      return;
     }
 
     if (rel._count && !rel.select && rel.relations.length === 0) {
@@ -187,7 +187,7 @@ async function hydrateLayer(
       for (const row of rows) {
         row[rel.name] = { _count: countMap.get(row[parentKey]) ?? 0 };
       }
-      continue;
+      return;
     }
 
     const childRows = await fetchBatch(nextTable, childKey, values, schema, rel.select, options.client);
@@ -225,7 +225,7 @@ async function hydrateLayer(
         }
       }
     }
-  }
+  }));
 }
 
 export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: MultiOptions, resolvedUrl?: string) {

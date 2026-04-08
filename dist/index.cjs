@@ -474,9 +474,9 @@ function shouldUseMultiQuery(ast, schema) {
 }
 async function hydrateLayer(tableName, rows, relations, schema, options, path) {
   const tableSchema = schema[tableName] || {};
-  for (const rel of relations) {
+  await Promise.all(relations.map(async (rel) => {
     const relation = getRelation(tableSchema, rel.name);
-    if (!relation) continue;
+    if (!relation) return;
     const nextTable = relation.table;
     const parentKey = relation.source;
     const childKey = relation.to || "id";
@@ -485,7 +485,7 @@ async function hydrateLayer(tableName, rows, relations, schema, options, path) {
       for (const row of rows) {
         row[rel.name] = rel._count ? { _count: 0 } : childKey === "id" ? null : [];
       }
-      continue;
+      return;
     }
     if (rel._count && !rel.select && rel.relations.length === 0) {
       const placeholders = values.map((_, idx) => `$${idx + 1}`);
@@ -500,7 +500,7 @@ async function hydrateLayer(tableName, rows, relations, schema, options, path) {
       for (const row of rows) {
         row[rel.name] = { _count: countMap.get(row[parentKey]) ?? 0 };
       }
-      continue;
+      return;
     }
     const childRows = await fetchBatch(nextTable, childKey, values, schema, rel.select, options.client);
     const nextPath = path.concat(tableName);
@@ -534,7 +534,7 @@ async function hydrateLayer(tableName, rows, relations, schema, options, path) {
         }
       }
     }
-  }
+  }));
 }
 async function executeMultiQuery(ast, schema, options, resolvedUrl) {
   const { sql, values } = buildRootSql(ast, schema);
