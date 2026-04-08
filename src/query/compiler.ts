@@ -64,7 +64,6 @@ export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Rec
     GROUP BY "${relation.to}"
   ) ${countAlias} ON ${countAlias}."__kadak_fk" = ${plan.from}."${relation.source}"`);
         selections.push(`COALESCE(${countAlias}."__kadak_count", 0) AS "${rel.name}__count"`);
-        continue;
       }
       addTableColumns(relation.table, alias, rel.select);
       walkRelations(relation.table, rel.relations);
@@ -83,7 +82,7 @@ export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Rec
 
   for (const join of plan.joins) {
     const rootRelation = ast.relations.find((rel) => rel.name === (join.alias || join.table));
-    if (rootRelation && rootRelation._count) {
+    if (rootRelation && rootRelation._count && !rootRelation.select && (!rootRelation.relations || rootRelation.relations.length === 0)) {
       continue;
     }
     const aliasStr = join.alias ? ` ${join.alias}` : "";

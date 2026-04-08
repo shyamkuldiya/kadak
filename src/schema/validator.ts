@@ -35,7 +35,7 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
         }
       }
     } else if (key === "limit" || key === "orderBy") {
-       if (hasCount) {
+      if (hasCount) {
         throw new Error("Kadak Error: _count can only coexist with select and where");
       }
       continue;
@@ -73,8 +73,6 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
           throw new Error(`Kadak Error: invalid field '${field}' on '${tableName}'`);
         }
       }
-    } else if (hasCount) {
-      throw new Error("Kadak Error: _count can only coexist with select and where");
     } else if (key === "_count") {
       if (value !== true) {
         throw new Error("Kadak Error: _count must be true");
@@ -89,12 +87,6 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
 
       if (typeof value === "object" && value !== null) {
         const relationObj = value as Record<string, unknown>;
-        if (relationObj._count === true) {
-          const keys = Object.keys(relationObj).filter((k) => k !== "_count");
-          if (keys.length > 0) {
-            throw new Error("Kadak Error: _count cannot be combined with fields or nested relations");
-          }
-        }
         if (typeof target === "object" && target !== null && "table" in target) {
           validateNode((target as { table: string }).table, value as Record<string, unknown>, schema, false);
         } else if (typeof target === "string") {

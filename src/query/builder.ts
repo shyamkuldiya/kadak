@@ -58,15 +58,6 @@ function parseNode(input: Record<string, unknown>, isRoot: boolean): { where: Pr
     } else if (value === true || (typeof value === "object" && value !== null)) {
       const relationInput = value === true ? {} : (value as Record<string, unknown>);
       const relationCount = relationInput._count === true;
-      if (relationCount) {
-        const nestedKeys = Object.keys(relationInput).filter((k) => k !== "_count");
-        if (nestedKeys.length > 0) {
-          throw new Error("Kadak Error: _count cannot be combined with fields or nested relations");
-        }
-      }
-      if (_count) {
-        throw new Error("Kadak Error: _count cannot be mixed with relations");
-      }
       const { relations: nestedRelations, select: nestedSelect } = parseNode(relationInput, false);
       relations.push({
         name: key,

@@ -100,15 +100,6 @@ function parseNode(input, isRoot) {
     } else if (value === true || typeof value === "object" && value !== null) {
       const relationInput = value === true ? {} : value;
       const relationCount = relationInput._count === true;
-      if (relationCount) {
-        const nestedKeys = Object.keys(relationInput).filter((k) => k !== "_count");
-        if (nestedKeys.length > 0) {
-          throw new Error("Kadak Error: _count cannot be combined with fields or nested relations");
-        }
-      }
-      if (_count) {
-        throw new Error("Kadak Error: _count cannot be mixed with relations");
-      }
       const { relations: nestedRelations, select: nestedSelect } = parseNode(relationInput, false);
       relations.push({
         name: key,
@@ -210,7 +201,6 @@ function compileSQL(plan, ast, schema) {
     GROUP BY "${relation.to}"
   ) ${countAlias} ON ${countAlias}."__kadak_fk" = ${plan.from}."${relation.source}"`);
         selections.push(`COALESCE(${countAlias}."__kadak_count", 0) AS "${rel.name}__count"`);
-        continue;
       }
       addTableColumns(relation.table, alias, rel.select);
       walkRelations(relation.table, rel.relations);
@@ -226,7 +216,7 @@ function compileSQL(plan, ast, schema) {
   }
   for (const join of plan.joins) {
     const rootRelation = ast.relations.find((rel) => rel.name === (join.alias || join.table));
-    if (rootRelation && rootRelation._count) {
+    if (rootRelation && rootRelation._count && !rootRelation.select && (!rootRelation.relations || rootRelation.relations.length === 0)) {
       continue;
     }
     const aliasStr = join.alias ? ` ${join.alias}` : "";
@@ -487,8 +477,6 @@ function validateNode(tableName, nodeInput, schema, isRoot = false) {
           throw new Error(`Kadak Error: invalid field '${field}' on '${tableName}'`);
         }
       }
-    } else if (hasCount) {
-      throw new Error("Kadak Error: _count can only coexist with select and where");
     } else if (key === "_count") {
       if (value !== true) {
         throw new Error("Kadak Error: _count must be true");
@@ -501,12 +489,6 @@ function validateNode(tableName, nodeInput, schema, isRoot = false) {
       }
       if (typeof value === "object" && value !== null) {
         const relationObj = value;
-        if (relationObj._count === true) {
-          const keys = Object.keys(relationObj).filter((k) => k !== "_count");
-          if (keys.length > 0) {
-            throw new Error("Kadak Error: _count cannot be combined with fields or nested relations");
-          }
-        }
         if (typeof target === "object" && target !== null && "table" in target) {
           validateNode(target.table, value, schema, false);
         } else if (typeof target === "string") {

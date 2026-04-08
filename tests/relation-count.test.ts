@@ -98,17 +98,103 @@ describe("relation count support", () => {
     expect(result[0].comments._count).toBe(0);
   });
 
-  it("throws when _count is mixed with fields", () => {
-    expect(() => dbClient.data({
+  it("allows _count to coexist with fields", () => {
+    const sql = dbClient.data({
+      posts: {
+        title: true,
+        comments: {
+          _count: true
+        }
+      }
+    }).toSQL().sql;
+
+    expect(sql).toContain('posts."title" AS "posts__title"');
+    expect(sql).toContain('COALESCE(comments__count_join."__kadak_count", 0) AS "comments__count"');
+  });
+
+  it("allows _count to coexist with nested relations", () => {
+    const db3 = kadak({ url: "postgres://localhost:5432/mock" });
+    const users = kadak.table({
+      name: "users",
+      columns: {
+        name: "string"
+      }
+    });
+    const posts3 = kadak.table({
+      name: "posts",
+      columns: {
+        title: "string",
+        authorId: kadak.types.ref("users", { as: "author" }),
+        comments: "comments.postId"
+      }
+    });
+    const comments3 = kadak.table({
+      name: "comments",
+      columns: {
+        content: "string",
+        postId: kadak.types.ref("posts", { as: "post" }),
+        authorId: kadak.types.ref("users", { as: "author" })
+      }
+    });
+    const client = db3.define({ users, posts: posts3, comments: comments3 });
+
+    const sql = client.data({
       posts: {
         comments: {
           _count: true,
-          select: {
-            content: true
+          author: {
+            select: {
+              name: true
+            }
           }
         }
       }
-    })).toThrow("Kadak Error: _count cannot be combined with fields or nested relations");
+    }).toSQL().sql;
+
+    expect(sql).toContain('COALESCE(comments__count_join."__kadak_count", 0) AS "comments__count"');
+    expect(sql).toContain('LEFT JOIN users author ON comments."authorId" = author."id"');
+  });
+
+  it("supports multiple relations with _count", () => {
+    const db3 = kadak({ url: "postgres://localhost:5432/mock" });
+    const users = kadak.table({
+      name: "users",
+      columns: {
+        name: "string"
+      }
+    });
+    const posts3 = kadak.table({
+      name: "posts",
+      columns: {
+        title: "string",
+        authorId: kadak.types.ref("users", { as: "author" }),
+        comments: "comments.postId"
+      }
+    });
+    const comments3 = kadak.table({
+      name: "comments",
+      columns: {
+        content: "string",
+        postId: kadak.types.ref("posts", { as: "post" })
+      }
+    });
+    const client = db3.define({ users, posts: posts3, comments: comments3 });
+
+    const sql = client.data({
+      posts: {
+        comments: {
+          _count: true
+        },
+        author: {
+          select: {
+            name: true
+          }
+        }
+      }
+    }).toSQL().sql;
+
+    expect(sql).toContain('COALESCE(comments__count_join."__kadak_count", 0) AS "comments__count"');
+    expect(sql).toContain('LEFT JOIN users author ON posts."authorId" = author."id"');
   });
 
   it("supports custom foreign key names from schema mapping", () => {
