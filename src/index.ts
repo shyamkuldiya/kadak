@@ -51,7 +51,9 @@ type RelationAlias<C> = BuiltColumn<C> extends { ref: { as: infer As extends str
 
 type RelationFromColumn<C, K extends string> =
   BuiltColumn<C> extends { ref: { table: infer Table extends string; as: infer As extends string } }
-    ? { table: Table; as: As }
+    ? BuiltColumn<C> extends { ref: { backRef: infer BackRef extends string } }
+      ? { table: Table; as: As } | { table: K extends string ? any : never; as: BackRef }
+      : { table: Table; as: As }
     : BuiltColumn<C> extends { relation: infer Rel extends string }
       ? Rel extends `${infer Table}.${string}`
         ? { table: Table; as: K }
@@ -254,6 +256,19 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
               to: def.ref.to || "id",
               source: col
             };
+            if (def.ref.backRef) {
+              const targetSchema = _currentSchema[def.ref.table] || {};
+              if (targetSchema[def.ref.backRef] || columns[def.ref.backRef] !== undefined) {
+                throw new Error(`Kadak Error: relation name '${def.ref.backRef}' conflicts with column`);
+              }
+              _currentSchema[def.ref.table] = targetSchema;
+              _currentSchema[def.ref.table][def.ref.backRef] = {
+                table: tableName,
+                as: def.ref.backRef,
+                to: col,
+                source: "id"
+              };
+            }
           } else if (typeof rawDef === "string" && rawDef.startsWith("ref:")) {
             throw new Error("Kadak Error: 'as' is required in ref()");
           } else if (typeof rawDef === "string" && rawDef.includes(".")) {

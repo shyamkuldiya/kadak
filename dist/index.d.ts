@@ -14,6 +14,7 @@ type ColumnObject = {
         as: string;
         to?: string;
         source?: string;
+        backRef?: string;
     };
     unique?: boolean;
     nullable?: boolean;
@@ -83,15 +84,17 @@ declare const types: {
             type: T;
         };
     }> & Column<T extends "string" ? string[] : number[]>;
-    ref: <const TableName extends string, const RelationName extends string, const To extends string = "id">(table: TableName, opts: {
+    ref: <const TableName extends string, const RelationName extends string, const To extends string = "id", const BackRef extends string | undefined = undefined>(table: TableName, opts: {
         as: RelationName;
         to?: To;
+        backRef?: BackRef;
     }) => ColumnBuilder<{
         type: "int";
         ref: {
             table: TableName;
             as: RelationName;
             to: To;
+            backRef?: BackRef;
         };
     }> & Column<number>;
     timestamps: () => {
@@ -235,7 +238,17 @@ type RelationFromColumn<C, K extends string> = BuiltColumn<C> extends {
         table: infer Table extends string;
         as: infer As extends string;
     };
+} ? BuiltColumn<C> extends {
+    ref: {
+        backRef: infer BackRef extends string;
+    };
 } ? {
+    table: Table;
+    as: As;
+} | {
+    table: K extends string ? any : never;
+    as: BackRef;
+} : {
     table: Table;
     as: As;
 } : BuiltColumn<C> extends {

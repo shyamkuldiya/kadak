@@ -14,6 +14,7 @@ export type ColumnObject = {
     as: string;
     to?: string;
     source?: string;
+    backRef?: string;
   };
   unique?: boolean;
   nullable?: boolean;
@@ -132,17 +133,17 @@ export const types = {
     b.obj.array = { type: inner.type as T };
     return b as ColumnBuilder<{ type: "array"; array: { type: T } }> & Column<T extends "string" ? string[] : number[]>;
   },
-  ref: <const TableName extends string, const RelationName extends string, const To extends string = "id">(
+  ref: <const TableName extends string, const RelationName extends string, const To extends string = "id", const BackRef extends string | undefined = undefined>(
     table: TableName,
-    opts: { as: RelationName; to?: To }
+    opts: { as: RelationName; to?: To; backRef?: BackRef }
   ) => {
     if (!opts?.as) {
       throw new Error("Kadak Error: 'as' is required in ref()");
     }
     const b = new ColumnBuilder<{ type: "int"; ref: { table: TableName; as: RelationName; to: To } }>();
-    b.obj.ref = { table, as: opts.as, to: (opts.to || "id") as To };
+    b.obj.ref = { table, as: opts.as, to: (opts.to || "id") as To, backRef: opts.backRef };
     b.obj.type = "int"; // Refs are integers
-    return b as ColumnBuilder<{ type: "int"; ref: { table: TableName; as: RelationName; to: To } }> & Column<number>;
+    return b as ColumnBuilder<{ type: "int"; ref: { table: TableName; as: RelationName; to: To; backRef?: BackRef } }> & Column<number>;
   },
   timestamps: () => ({
     createdAt: new ColumnBuilder("timestamp").defaultNow() as ColumnBuilder<{ type: "timestamp" }> & Column<string>,

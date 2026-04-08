@@ -538,7 +538,7 @@ var types = {
       throw new Error("Kadak Error: 'as' is required in ref()");
     }
     const b = new ColumnBuilder();
-    b.obj.ref = { table, as: opts.as, to: opts.to || "id" };
+    b.obj.ref = { table, as: opts.as, to: opts.to || "id", backRef: opts.backRef };
     b.obj.type = "int";
     return b;
   },
@@ -757,6 +757,19 @@ var kadak = ((config) => {
               to: def.ref.to || "id",
               source: col
             };
+            if (def.ref.backRef) {
+              const targetSchema = _currentSchema[def.ref.table] || {};
+              if (targetSchema[def.ref.backRef] || columns[def.ref.backRef] !== void 0) {
+                throw new Error(`Kadak Error: relation name '${def.ref.backRef}' conflicts with column`);
+              }
+              _currentSchema[def.ref.table] = targetSchema;
+              _currentSchema[def.ref.table][def.ref.backRef] = {
+                table: tableName,
+                as: def.ref.backRef,
+                to: col,
+                source: "id"
+              };
+            }
           } else if (typeof rawDef === "string" && rawDef.startsWith("ref:")) {
             throw new Error("Kadak Error: 'as' is required in ref()");
           } else if (typeof rawDef === "string" && rawDef.includes(".")) {
