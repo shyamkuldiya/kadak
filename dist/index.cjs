@@ -517,13 +517,16 @@ async function hydratePlan(plan, rows, schema, options, cache) {
     list.push(edge);
     groupedEdges.set(edge.parentTable, list);
   }
+  for (const [tableName, edges] of groupedEdges.entries()) {
+    groupedEdges.set(tableName, edges.slice().sort((a, b) => a.relationName.localeCompare(b.relationName)));
+  }
   const frontier = /* @__PURE__ */ new Map();
   frontier.set(plan.root, rows);
   const visited = /* @__PURE__ */ new Set();
   const maxPasses = Math.max(1, plan.edges.length + 1);
   for (let pass = 0; pass < maxPasses; pass++) {
     let progressed = false;
-    const currentFrontier = Array.from(frontier.entries());
+    const currentFrontier = Array.from(frontier.entries()).sort(([a], [b]) => a.localeCompare(b));
     frontier.clear();
     for (const [tableName, tableRows] of currentFrontier) {
       const edges = groupedEdges.get(tableName) || [];

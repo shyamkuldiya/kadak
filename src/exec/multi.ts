@@ -234,6 +234,9 @@ async function hydratePlan(
     list.push(edge);
     groupedEdges.set(edge.parentTable, list);
   }
+  for (const [tableName, edges] of groupedEdges.entries()) {
+    groupedEdges.set(tableName, edges.slice().sort((a, b) => a.relationName.localeCompare(b.relationName)));
+  }
 
   const frontier = new Map<string, Row[]>();
   frontier.set(plan.root, rows);
@@ -243,7 +246,7 @@ async function hydratePlan(
 
   for (let pass = 0; pass < maxPasses; pass++) {
     let progressed = false;
-    const currentFrontier = Array.from(frontier.entries());
+    const currentFrontier = Array.from(frontier.entries()).sort(([a], [b]) => a.localeCompare(b));
     frontier.clear();
 
     for (const [tableName, tableRows] of currentFrontier) {
