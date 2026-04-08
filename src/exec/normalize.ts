@@ -21,6 +21,7 @@ export function normalize(rows: Row[], ast: QueryAST, schema: Schema): Row[] {
 
   const rootPrefix = `${ast.root}__`;
   const directRelationPrefixes = new Set(ast.relations.map((rel) => `${rel.name}_`));
+  const exposeRootId = !ast.select || !!ast.select.id;
 
   for (const row of rows) {
     const id = row[`${rootPrefix}id`] ?? row.id;
@@ -28,7 +29,10 @@ export function normalize(rows: Row[], ast: QueryAST, schema: Schema): Row[] {
 
     let rootObj = rootMap.get(id);
     if (!rootObj) {
-      rootObj = { id };
+      rootObj = {};
+      if (exposeRootId) {
+        rootObj.id = id;
+      }
       for (const [key, val] of Object.entries(row)) {
         if (key.startsWith(rootPrefix)) {
           if (key !== `${rootPrefix}id`) rootObj[key.replace(rootPrefix, "")] = val;

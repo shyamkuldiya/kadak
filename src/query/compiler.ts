@@ -23,8 +23,7 @@ export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Rec
       return true;
     });
 
-    const hasId = !select || select.id || !!alias;
-    if (hasId) {
+    if (true) {
       selections.push(`${tableId}.id AS "${tableId}${alias ? "_" : "__"}id"`);
     }
 

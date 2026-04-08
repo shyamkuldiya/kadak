@@ -23,7 +23,6 @@ describe("select support", () => {
     const q = dbClient.data({
       users: {
         select: {
-          id: true,
           name: true
         }
       }
@@ -31,6 +30,32 @@ describe("select support", () => {
 
     const sql = q.toSQL().sql;
     expect(sql).toContain('SELECT users.id AS "users__id", users."name" AS "users__name" FROM users');
+  });
+
+  it("returns rows even when id is not selected", () => {
+    const ast = {
+      root: "posts",
+      select: { content: true },
+      relations: []
+    } as any;
+
+    const rows = [
+      {
+        posts__id: 1,
+        posts__content: "Hello"
+      }
+    ];
+
+    const result = normalize(rows, ast, {
+      posts: {}
+    } as any);
+
+    expect(result).toEqual([
+      {
+        content: "Hello"
+      }
+    ]);
+    expect(result[0]).not.toHaveProperty("id");
   });
 
   it("supports nested select", () => {
@@ -68,11 +93,11 @@ describe("select support", () => {
   it("normalizes partial rows", () => {
     const ast = {
       root: "posts",
-      select: { id: true, title: true },
+      select: { title: true },
       relations: [
         {
           name: "author",
-          select: { id: true, name: true },
+          select: { name: true },
           relations: []
         }
       ]
@@ -97,6 +122,7 @@ describe("select support", () => {
     expect(result[0].author.name).toBe("Ada");
     expect(result[0]).not.toHaveProperty("author_id");
     expect(result[0]).not.toHaveProperty("author_email");
+    expect(result[0]).not.toHaveProperty("id");
   });
 
   it("keeps null relation null", () => {

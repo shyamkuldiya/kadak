@@ -159,8 +159,7 @@ function compileSQL(plan, ast, schema) {
       if (typeof mapping === "object" && mapping !== null && "table" in mapping && "as" in mapping) return false;
       return true;
     });
-    const hasId = !select || select.id || !!alias;
-    if (hasId) {
+    if (true) {
       selections.push(`${tableId}.id AS "${tableId}${alias ? "_" : "__"}id"`);
     }
     for (const field of fields) {
@@ -249,12 +248,16 @@ function normalize(rows, ast, schema) {
   const results = [];
   const rootPrefix = `${ast.root}__`;
   const directRelationPrefixes = new Set(ast.relations.map((rel) => `${rel.name}_`));
+  const exposeRootId = !ast.select || !!ast.select.id;
   for (const row of rows) {
     const id = row[`${rootPrefix}id`] ?? row.id;
     if (id === null || id === void 0) continue;
     let rootObj = rootMap.get(id);
     if (!rootObj) {
-      rootObj = { id };
+      rootObj = {};
+      if (exposeRootId) {
+        rootObj.id = id;
+      }
       for (const [key, val] of Object.entries(row)) {
         if (key.startsWith(rootPrefix)) {
           if (key !== `${rootPrefix}id`) rootObj[key.replace(rootPrefix, "")] = val;
