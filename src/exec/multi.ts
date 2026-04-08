@@ -32,6 +32,8 @@ type ExecutionPlan = {
   edges: ExecutionEdge[];
 };
 
+type AttachmentMap = Map<string, Row[]>;
+
 function isRelationEntry(entry: SchemaEntry | undefined): entry is RelationDefinition {
   return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
 }
@@ -218,6 +220,16 @@ function buildExecutionPlan(ast: QueryAST, schema: Schema): ExecutionPlan {
   };
 }
 
+function buildAttachmentMap(edges: ExecutionEdge[]): AttachmentMap {
+  const grouped = new Map<string, Row[]>();
+  for (const edge of edges) {
+    const list = grouped.get(edge.parentTable) || [];
+    list.push({} as Row);
+    grouped.set(edge.parentTable, list);
+  }
+  return grouped;
+}
+
 function shouldUseMultiQuery(ast: QueryAST, schema: Schema): boolean {
   const depth = (relations: RelationAST[]): number => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
   if (ast._count) return false;
@@ -318,6 +330,7 @@ async function hydratePlan(
     list.push(edge);
     groupedEdges.set(edge.parentTable, list);
   }
+  const attachmentMap = buildAttachmentMap(plan.edges);
 
   const frontier = new Map<string, Row[]>();
   frontier.set(plan.root, rows);
@@ -348,6 +361,9 @@ async function hydratePlan(
         }
 
         progressed = true;
+
+        const attachmentBucket = attachmentMap.get(tableName) || [];
+        if (attachmentBucket.length === 0) continue;
 
         if (edge.mode === "count") {
           const placeholders = values.map((_, idx) => `$${idx + 1}`);

@@ -457,6 +457,15 @@ function buildExecutionPlan(ast, schema) {
     edges
   };
 }
+function buildAttachmentMap(edges) {
+  const grouped = /* @__PURE__ */ new Map();
+  for (const edge of edges) {
+    const list = grouped.get(edge.parentTable) || [];
+    list.push({});
+    grouped.set(edge.parentTable, list);
+  }
+  return grouped;
+}
 function shouldUseMultiQuery(ast, schema) {
   const depth = (relations) => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
   if (ast._count) return false;
@@ -470,6 +479,7 @@ async function hydratePlan(plan, rows, schema, options, cache) {
     list.push(edge);
     groupedEdges.set(edge.parentTable, list);
   }
+  const attachmentMap = buildAttachmentMap(plan.edges);
   const frontier = /* @__PURE__ */ new Map();
   frontier.set(plan.root, rows);
   const visited = /* @__PURE__ */ new Set();
@@ -493,6 +503,8 @@ async function hydratePlan(plan, rows, schema, options, cache) {
           continue;
         }
         progressed = true;
+        const attachmentBucket = attachmentMap.get(tableName) || [];
+        if (attachmentBucket.length === 0) continue;
         if (edge.mode === "count") {
           const placeholders = values.map((_, idx) => `$${idx + 1}`);
           const sql = `SELECT ${quote(edge.childKey)} AS "__kadak_fk", COUNT(*) AS "__kadak_count" FROM ${edge.childTable} WHERE ${quote(edge.childKey)} IN (${placeholders.join(", ")}) GROUP BY ${quote(edge.childKey)}`;
