@@ -13,13 +13,14 @@ type Schema = Record<string, Record<string, unknown>>;
 /**
  * Normalizes flat SQL rows into a nested object graph based on the AST structure.
  * Groups by 'id' and avoids duplicates.
- * Supports both aliased (table__col) and raw rows (for mutations).
+ * Supports both aliased (table__col for roots, relation_col for relations) and raw rows (for mutations).
  */
 export function normalize(rows: Row[], ast: QueryAST, schema: Schema): Row[] {
   const rootMap = new Map<unknown, Row>();
   const results: Row[] = [];
 
   const rootPrefix = `${ast.root}__`;
+  const directRelationPrefixes = new Set(ast.relations.map((rel) => `${rel.name}_`));
 
   for (const row of rows) {
     const id = row[`${rootPrefix}id`] ?? row.id;
@@ -31,7 +32,7 @@ export function normalize(rows: Row[], ast: QueryAST, schema: Schema): Row[] {
       for (const [key, val] of Object.entries(row)) {
         if (key.startsWith(rootPrefix)) {
           if (key !== `${rootPrefix}id`) rootObj[key.replace(rootPrefix, "")] = val;
-        } else if (!key.includes("__")) {
+        } else if (!key.includes("__") && !Array.from(directRelationPrefixes).some((prefix) => key.startsWith(prefix))) {
           if (key !== "id") rootObj[key] = val;
         }
       }
@@ -63,7 +64,7 @@ function processRelations(
     const targetField = relation.to;
     const isOneToMany = targetField !== "id";
 
-    const prefix = `${rel.name}__`;
+    const prefix = `${rel.name}_`;
     const relId = row[`${prefix}id`];
 
     if (relId === null || relId === undefined) {
@@ -87,6 +88,10 @@ function processRelations(
         if (key.startsWith(prefix) && key !== `${prefix}id`) {
           relObj[key.replace(prefix, "")] = row[key];
         }
+      }
+
+      if (!rel.select?.id) {
+        delete relObj.id;
       }
 
       if (isOneToMany) {

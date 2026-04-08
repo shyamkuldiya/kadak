@@ -23,14 +23,14 @@ export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Rec
       return true;
     });
 
-    const hasId = !select || select.id;
+    const hasId = !select || select.id || !!alias;
     if (hasId) {
-      selections.push(`${tableId}.id AS "${tableId}__id"`);
+      selections.push(`${tableId}.id AS "${tableId}${alias ? "_" : "__"}id"`);
     }
 
     for (const field of fields) {
       if (field === "id") continue;
-      selections.push(`${tableId}."${field}" AS "${tableId}__${field}"`);
+      selections.push(`${tableId}."${field}" AS "${tableId}${alias ? "_" : "__"}${field}"`);
     }
   };
 

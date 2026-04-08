@@ -159,13 +159,13 @@ function compileSQL(plan, ast, schema) {
       if (typeof mapping === "object" && mapping !== null && "table" in mapping && "as" in mapping) return false;
       return true;
     });
-    const hasId = !select || select.id;
+    const hasId = !select || select.id || !!alias;
     if (hasId) {
-      selections.push(`${tableId}.id AS "${tableId}__id"`);
+      selections.push(`${tableId}.id AS "${tableId}${alias ? "_" : "__"}id"`);
     }
     for (const field of fields) {
       if (field === "id") continue;
-      selections.push(`${tableId}."${field}" AS "${tableId}__${field}"`);
+      selections.push(`${tableId}."${field}" AS "${tableId}${alias ? "_" : "__"}${field}"`);
     }
   };
   const walkRelations = (tableName, relations) => {
@@ -248,6 +248,7 @@ function normalize(rows, ast, schema) {
   const rootMap = /* @__PURE__ */ new Map();
   const results = [];
   const rootPrefix = `${ast.root}__`;
+  const directRelationPrefixes = new Set(ast.relations.map((rel) => `${rel.name}_`));
   for (const row of rows) {
     const id = row[`${rootPrefix}id`] ?? row.id;
     if (id === null || id === void 0) continue;
@@ -257,7 +258,7 @@ function normalize(rows, ast, schema) {
       for (const [key, val] of Object.entries(row)) {
         if (key.startsWith(rootPrefix)) {
           if (key !== `${rootPrefix}id`) rootObj[key.replace(rootPrefix, "")] = val;
-        } else if (!key.includes("__")) {
+        } else if (!key.includes("__") && !Array.from(directRelationPrefixes).some((prefix) => key.startsWith(prefix))) {
           if (key !== "id") rootObj[key] = val;
         }
       }
@@ -276,7 +277,7 @@ function processRelations(parentTable, parentObj, row, relations, schema) {
     const targetTable = relation.table;
     const targetField = relation.to;
     const isOneToMany = targetField !== "id";
-    const prefix = `${rel.name}__`;
+    const prefix = `${rel.name}_`;
     const relId = row[`${prefix}id`];
     if (relId === null || relId === void 0) {
       if (!Object.prototype.hasOwnProperty.call(parentObj, rel.name)) {
@@ -297,6 +298,9 @@ function processRelations(parentTable, parentObj, row, relations, schema) {
         if (key.startsWith(prefix) && key !== `${prefix}id`) {
           relObj[key.replace(prefix, "")] = row[key];
         }
+      }
+      if (!rel.select?.id) {
+        delete relObj.id;
       }
       if (isOneToMany) {
         parentObj[rel.name].push(relObj);

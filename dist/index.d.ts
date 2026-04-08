@@ -163,7 +163,7 @@ type Schema = Record<string, Record<string, unknown>>;
 /**
  * Normalizes flat SQL rows into a nested object graph based on the AST structure.
  * Groups by 'id' and avoids duplicates.
- * Supports both aliased (table__col) and raw rows (for mutations).
+ * Supports both aliased (table__col for roots, relation_col for relations) and raw rows (for mutations).
  */
 declare function normalize(rows: Row[], ast: QueryAST, schema: Schema): Row[];
 
