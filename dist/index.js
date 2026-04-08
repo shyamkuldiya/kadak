@@ -545,6 +545,27 @@ async function hydratePlan(plan, rows, schema, options, cache) {
     if (!progressed || frontier.size === 0) break;
   }
 }
+function finalizeRows(rows, ast) {
+  const select = ast.select;
+  if (!select) return rows;
+  return rows.map((row) => {
+    const out = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (key === "id") {
+        if (select.id) out.id = value;
+        continue;
+      }
+      if (key in select) {
+        out[key] = value;
+      } else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+        out[key] = value;
+      } else if (Array.isArray(value)) {
+        out[key] = value;
+      }
+    }
+    return out;
+  });
+}
 async function executeMultiQuery(ast, schema, options, resolvedUrl) {
   const { sql, values } = buildRootSql(ast, schema);
   const rootRows = await runQuery(sql, values, resolvedUrl, options.client);
@@ -552,7 +573,7 @@ async function executeMultiQuery(ast, schema, options, resolvedUrl) {
   const cache = /* @__PURE__ */ new Map();
   const plan = buildExecutionPlan(ast, schema);
   await hydratePlan(plan, rows, schema, options, cache);
-  return { rootRows: rows, sql, values };
+  return { rootRows: finalizeRows(rows, ast), sql, values };
 }
 
 // src/exec/mutations.ts

@@ -407,6 +407,28 @@ async function hydratePlan(
   }
 }
 
+function finalizeRows(rows: Row[], ast: QueryAST): Row[] {
+  const select = ast.select;
+  if (!select) return rows;
+  return rows.map((row) => {
+    const out: Row = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (key === "id") {
+        if (select.id) out.id = value;
+        continue;
+      }
+      if (key in select) {
+        out[key] = value;
+      } else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+        out[key] = value;
+      } else if (Array.isArray(value)) {
+        out[key] = value;
+      }
+    }
+    return out;
+  });
+}
+
 export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: MultiOptions, resolvedUrl?: string) {
   const { sql, values } = buildRootSql(ast, schema);
   const rootRows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
@@ -414,7 +436,7 @@ export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: 
   const cache = new Map<CacheKey, Promise<Row[]>>();
   const plan = buildExecutionPlan(ast, schema);
   await hydratePlan(plan, rows, schema, options, cache);
-  return { rootRows: rows, sql, values };
+  return { rootRows: finalizeRows(rows, ast), sql, values };
 }
 
 export function buildMultiRootSql(ast: QueryAST, schema: Schema) {
