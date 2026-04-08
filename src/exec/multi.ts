@@ -85,10 +85,6 @@ function buildRootSql(ast: QueryAST, schema: Schema) {
   return { sql, values };
 }
 
-function selectFields(select?: Record<string, true>) {
-  return select ? Object.keys(select).filter((field) => field !== "id") : undefined;
-}
-
 function parentKeySet(rows: Row[], field: string) {
   return unique(rows.map((row) => row[field]).filter((value) => value !== null && value !== undefined));
 }
@@ -140,7 +136,7 @@ async function fetchBatch(
   const cacheKey = `${table}:${field}:${select ? Object.keys(select).sort().join(",") : "*"}:${serializeValues(values)}`;
   if (cache?.has(cacheKey)) return await cache.get(cacheKey)!;
   const tableSchema = schema[table] || {};
-  const fields = selectFields(select) ?? getBaseFields(tableSchema);
+  const fields = select ? Object.keys(select).filter((field) => field !== "id") : getBaseFields(tableSchema);
   const cols = unique(["id", ...fields]).map((f) => quote(f));
   const placeholders = values.map((_, idx) => `$${idx + 1}`);
   const sql = `SELECT ${cols.join(", ")} FROM ${table} WHERE ${quote(field)} IN (${placeholders.join(", ")})`;
