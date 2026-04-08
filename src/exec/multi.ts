@@ -149,12 +149,6 @@ async function fetchBatch(
   return await query;
 }
 
-function relationShapeNeedsBatch(rel: RelationAST, schema: Schema, parentTable: string): boolean {
-  const relation = getRelation(schema[parentTable] || {}, rel.name);
-  if (!relation) return false;
-  return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
-}
-
 function buildExecutionPlan(ast: QueryAST, schema: Schema): ExecutionPlan {
   const edges: ExecutionEdge[] = [];
 
@@ -190,7 +184,11 @@ function shouldUseMultiQuery(ast: QueryAST, schema: Schema): boolean {
   const depth = (relations: RelationAST[]): number => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
   if (ast._count) return false;
   if (depth(ast.relations) > 1) return true;
-  return ast.relations.some((rel) => relationShapeNeedsBatch(rel, schema, ast.root));
+  return ast.relations.some((rel) => {
+    const relation = getRelation(schema[ast.root] || {}, rel.name);
+    if (!relation) return false;
+    return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
+  });
 }
 
 async function hydratePlan(
@@ -269,7 +267,8 @@ async function hydratePlan(
         }
 
         const childRows = await fetchBatch(edge.childTable, edge.childKey, values, schema, edge.select, options.client, cache);
-        const childBucket = edge.childKey === "id" ? bucketRows(childRows, edge.childKey, edge.select).single : bucketRows(childRows, edge.childKey, edge.select).byKey;
+        const buckets = bucketRows(childRows, edge.childKey, edge.select);
+        const childBucket = edge.childKey === "id" ? buckets.single : buckets.byKey;
 
         for (const row of tableRows) {
           const parentValue = row[edge.parentKey];
@@ -284,7 +283,7 @@ async function hydratePlan(
 
         if (edge._count) {
           const countMap = new Map<unknown, number>();
-          for (const [key, bucket] of bucketRows(childRows, edge.childKey, edge.select).byKey.entries()) {
+          for (const [key, bucket] of buckets.byKey.entries()) {
             countMap.set(key, bucket.length);
           }
           assignCount(tableRows, edge.relationName, edge.parentKey, countMap);

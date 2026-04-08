@@ -456,11 +456,6 @@ async function fetchBatch(table, field, values, schema, select, client, cache) {
   cache?.set(cacheKey, query);
   return await query;
 }
-function relationShapeNeedsBatch(rel, schema, parentTable) {
-  const relation = getRelation(schema[parentTable] || {}, rel.name);
-  if (!relation) return false;
-  return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
-}
 function buildExecutionPlan(ast, schema) {
   const edges = [];
   const walk = (tableName, relations) => {
@@ -492,7 +487,11 @@ function shouldUseMultiQuery(ast, schema) {
   const depth = (relations) => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
   if (ast._count) return false;
   if (depth(ast.relations) > 1) return true;
-  return ast.relations.some((rel) => relationShapeNeedsBatch(rel, schema, ast.root));
+  return ast.relations.some((rel) => {
+    const relation = getRelation(schema[ast.root] || {}, rel.name);
+    if (!relation) return false;
+    return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
+  });
 }
 async function hydratePlan(plan, rows, schema, options, cache) {
   const groupedEdges = /* @__PURE__ */ new Map();
@@ -554,7 +553,8 @@ async function hydratePlan(plan, rows, schema, options, cache) {
           continue;
         }
         const childRows = await fetchBatch(edge.childTable, edge.childKey, values, schema, edge.select, options.client, cache);
-        const childBucket = edge.childKey === "id" ? bucketRows(childRows, edge.childKey, edge.select).single : bucketRows(childRows, edge.childKey, edge.select).byKey;
+        const buckets = bucketRows(childRows, edge.childKey, edge.select);
+        const childBucket = edge.childKey === "id" ? buckets.single : buckets.byKey;
         for (const row of tableRows) {
           const parentValue = row[edge.parentKey];
           if (edge.childKey === "id") {
@@ -567,7 +567,7 @@ async function hydratePlan(plan, rows, schema, options, cache) {
         }
         if (edge._count) {
           const countMap = /* @__PURE__ */ new Map();
-          for (const [key, bucket] of bucketRows(childRows, edge.childKey, edge.select).byKey.entries()) {
+          for (const [key, bucket] of buckets.byKey.entries()) {
             countMap.set(key, bucket.length);
           }
           assignCount(tableRows, edge.relationName, edge.parentKey, countMap);
