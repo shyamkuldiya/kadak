@@ -360,7 +360,7 @@ function processRelations(parentTable, parentObj, row, relations, schema) {
   }
 }
 
-// src/exec/multi.ts
+// src/exec/multi-plan.ts
 function isRelationEntry(entry) {
   return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
 }
@@ -373,13 +373,48 @@ function getRelation(tableSchema, relName) {
   }
   return void 0;
 }
+function relationNeedsBatch(rel, schema, root) {
+  const relation = getRelation(schema[root] || {}, rel.name);
+  if (!relation) return false;
+  return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
+}
+function buildExecutionPlan(ast, schema) {
+  const edges = [];
+  const queue = [{ tableName: ast.root, relations: ast.relations }];
+  for (let cursor = 0; cursor < queue.length; cursor++) {
+    const { tableName, relations } = queue[cursor];
+    const tableSchema = schema[tableName] || {};
+    for (const rel of relations) {
+      const relation = getRelation(tableSchema, rel.name);
+      if (!relation) continue;
+      const childTable = relation.table;
+      edges.push({
+        parentTable: tableName,
+        relationName: rel.name,
+        childTable,
+        parentKey: relation.source,
+        childKey: relation.to || "id",
+        select: rel.select,
+        _count: rel._count,
+        relations: rel.relations
+      });
+      if (rel.relations.length > 0) {
+        queue.push({ tableName: childTable, relations: rel.relations });
+      }
+    }
+  }
+  return { root: ast.root, edges };
+}
+function shouldUseMultiQuery(ast, schema) {
+  const depth = (relations) => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
+  if (ast._count) return false;
+  if (depth(ast.relations) > 1) return true;
+  return ast.relations.some((rel) => relationNeedsBatch(rel, schema, ast.root));
+}
+
+// src/exec/multi.ts
 function getBaseFields(tableSchema) {
-  return Object.keys(tableSchema).filter((field) => {
-    const mapping = tableSchema[field];
-    if (field === "id") return false;
-    if (typeof mapping === "string" && mapping.includes(".")) return false;
-    return !isRelationEntry(mapping);
-  });
+  return Object.keys(tableSchema).filter((field) => field !== "id");
 }
 function quote(field) {
   return `"${field}"`;
@@ -452,46 +487,6 @@ async function fetchBatch(table, field, values, schema, select, client, cache) {
   const query = runQuery(sql, values, void 0, client);
   cache?.set(cacheKey, query);
   return await query;
-}
-function buildExecutionPlan(ast, schema) {
-  const edges = [];
-  const queue = [{ tableName: ast.root, relations: ast.relations }];
-  for (let cursor = 0; cursor < queue.length; cursor++) {
-    const { tableName, relations } = queue[cursor];
-    const tableSchema = schema[tableName] || {};
-    for (const rel of relations) {
-      const relation = getRelation(tableSchema, rel.name);
-      if (!relation) continue;
-      const childTable = relation.table;
-      edges.push({
-        parentTable: tableName,
-        relationName: rel.name,
-        childTable,
-        parentKey: relation.source,
-        childKey: relation.to || "id",
-        select: rel.select,
-        _count: rel._count,
-        relations: rel.relations
-      });
-      if (rel.relations.length > 0) {
-        queue.push({ tableName: childTable, relations: rel.relations });
-      }
-    }
-  }
-  return {
-    root: ast.root,
-    edges
-  };
-}
-function shouldUseMultiQuery(ast, schema) {
-  const depth = (relations) => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
-  if (ast._count) return false;
-  if (depth(ast.relations) > 1) return true;
-  return ast.relations.some((rel) => {
-    const relation = getRelation(schema[ast.root] || {}, rel.name);
-    if (!relation) return false;
-    return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
-  });
 }
 async function hydratePlan(plan, rows, schema, options, cache) {
   const groupedEdges = /* @__PURE__ */ new Map();

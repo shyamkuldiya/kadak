@@ -1,51 +1,14 @@
 import pg from "pg";
-import { QueryAST, RelationAST } from "../query/ast.js";
+import { QueryAST } from "../query/ast.js";
 import { runQuery } from "./client.js";
+import { buildExecutionPlan, shouldUseMultiQuery, type ExecutionEdge, type ExecutionPlan, type Schema } from "./multi-plan.js";
 
-type SchemaEntry = string | { table: string; as: string; to: string; source: string } | Record<string, unknown>;
-type Schema = Record<string, Record<string, SchemaEntry>>;
 type Row = Record<string, unknown>;
 type MultiOptions = { client?: pg.PoolClient; debug?: boolean };
-type RelationDefinition = { table: string; as: string; to: string; source: string };
 type CacheKey = string;
 
-type ExecutionEdge = {
-  parentTable: string;
-  relationName: string;
-  childTable: string;
-  parentKey: string;
-  childKey: string;
-  select?: Record<string, true>;
-  _count?: boolean;
-  relations: RelationAST[];
-};
-
-type ExecutionPlan = {
-  root: QueryAST["root"];
-  edges: ExecutionEdge[];
-};
-
-function isRelationEntry(entry: SchemaEntry | undefined): entry is RelationDefinition {
-  return !!entry && typeof entry === "object" && "table" in entry && "as" in entry && "to" in entry && "source" in entry;
-}
-
-function getRelation(tableSchema: Record<string, SchemaEntry>, relName: string): RelationDefinition | undefined {
-  const entry = tableSchema[relName];
-  if (isRelationEntry(entry)) return entry;
-  if (typeof entry === "string" && entry.includes(".")) {
-    const [table, to] = entry.split(".");
-    return { table, as: relName, to: to || "id", source: "id" };
-  }
-  return undefined;
-}
-
-function getBaseFields(tableSchema: Record<string, SchemaEntry>): string[] {
-  return Object.keys(tableSchema).filter((field) => {
-    const mapping = tableSchema[field];
-    if (field === "id") return false;
-    if (typeof mapping === "string" && mapping.includes(".")) return false;
-    return !isRelationEntry(mapping);
-  });
+function getBaseFields(tableSchema: Record<string, unknown>): string[] {
+  return Object.keys(tableSchema).filter((field) => field !== "id");
 }
 
 function quote(field: string) {
@@ -145,49 +108,6 @@ async function fetchBatch(
   return await query;
 }
 
-function buildExecutionPlan(ast: QueryAST, schema: Schema): ExecutionPlan {
-  const edges: ExecutionEdge[] = [];
-  const queue: Array<{ tableName: string; relations: RelationAST[] }> = [{ tableName: ast.root, relations: ast.relations }];
-
-  for (let cursor = 0; cursor < queue.length; cursor++) {
-    const { tableName, relations } = queue[cursor];
-    const tableSchema = schema[tableName] || {};
-    for (const rel of relations) {
-      const relation = getRelation(tableSchema, rel.name);
-      if (!relation) continue;
-      const childTable = relation.table;
-      edges.push({
-        parentTable: tableName,
-        relationName: rel.name,
-        childTable,
-        parentKey: relation.source,
-        childKey: relation.to || "id",
-        select: rel.select,
-        _count: rel._count,
-        relations: rel.relations
-      });
-      if (rel.relations.length > 0) {
-        queue.push({ tableName: childTable, relations: rel.relations });
-      }
-    }
-  }
-
-  return {
-    root: ast.root,
-    edges
-  };
-}
-
-function shouldUseMultiQuery(ast: QueryAST, schema: Schema): boolean {
-  const depth = (relations: RelationAST[]): number => relations.reduce((max, rel) => Math.max(max, 1 + depth(rel.relations)), 0);
-  if (ast._count) return false;
-  if (depth(ast.relations) > 1) return true;
-  return ast.relations.some((rel) => {
-    const relation = getRelation(schema[ast.root] || {}, rel.name);
-    if (!relation) return false;
-    return rel.relations.length > 0 || !!rel._count || relation.source !== "id" || relation.to !== "id";
-  });
-}
 
 async function hydratePlan(
   plan: ExecutionPlan,
