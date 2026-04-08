@@ -363,15 +363,6 @@ function buildRootSql(ast, schema) {
   if (ast.skip !== void 0) sql += ` OFFSET ${ast.skip}`;
   return { sql, values };
 }
-function normalizeRoot(row, select) {
-  const out = {};
-  if (!select || select.id) out.id = row.id;
-  for (const [key, value] of Object.entries(row)) {
-    if (key === "id") continue;
-    if (!select || select[key]) out[key] = value;
-  }
-  return out;
-}
 function selectFields(select) {
   return select ? Object.keys(select).filter((field) => field !== "id") : void 0;
 }
@@ -567,8 +558,7 @@ function finalizeRows(rows, ast) {
 }
 async function executeMultiQuery(ast, schema, options, resolvedUrl) {
   const { sql, values } = buildRootSql(ast, schema);
-  const rootRows = await runQuery(sql, values, resolvedUrl, options.client);
-  const rows = rootRows.map((row) => normalizeRoot(row, ast.select));
+  const rows = await runQuery(sql, values, resolvedUrl, options.client);
   const cache = /* @__PURE__ */ new Map();
   const plan = buildExecutionPlan(ast, schema);
   await hydratePlan(plan, rows, schema, options, cache);

@@ -85,16 +85,6 @@ function buildRootSql(ast: QueryAST, schema: Schema) {
   return { sql, values };
 }
 
-function normalizeRoot(row: Row, select?: Record<string, true>) {
-  const out: Row = {};
-  if (!select || select.id) out.id = row.id;
-  for (const [key, value] of Object.entries(row)) {
-    if (key === "id") continue;
-    if (!select || select[key]) out[key] = value;
-  }
-  return out;
-}
-
 function selectFields(select?: Record<string, true>) {
   return select ? Object.keys(select).filter((field) => field !== "id") : undefined;
 }
@@ -336,8 +326,7 @@ function finalizeRows(rows: Row[], ast: QueryAST): Row[] {
 
 export async function executeMultiQuery(ast: QueryAST, schema: Schema, options: MultiOptions, resolvedUrl?: string) {
   const { sql, values } = buildRootSql(ast, schema);
-  const rootRows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
-  const rows = rootRows.map((row) => normalizeRoot(row, ast.select));
+  const rows = (await runQuery(sql, values, resolvedUrl, options.client)) as Row[];
   const cache = new Map<CacheKey, Promise<Row[]>>();
   const plan = buildExecutionPlan(ast, schema);
   await hydratePlan(plan, rows, schema, options, cache);
