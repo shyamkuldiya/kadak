@@ -12,14 +12,6 @@ export function validateInput(input: Record<string, unknown>, schema: Record<str
   }
 
   const rootNode = input[rootTable] as Record<string, unknown>;
-  const hasCount = Object.prototype.hasOwnProperty.call(rootNode, "count") && Boolean((rootNode as Record<string, unknown>).count);
-  if (hasCount) {
-    for (const key of Object.keys(rootNode)) {
-      if (!["count", "where"].includes(key)) {
-        throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
-      }
-    }
-  }
   const hasPagination = Object.prototype.hasOwnProperty.call(rootNode, "take") || Object.prototype.hasOwnProperty.call(rootNode, "skip");
   if (hasPagination && !Object.prototype.hasOwnProperty.call(rootNode, "orderBy")) {
     throw new Error("Kadak Error: orderBy is required when using pagination");
@@ -31,6 +23,7 @@ export function validateInput(input: Record<string, unknown>, schema: Record<str
 function validateNode(tableName: string, nodeInput: Record<string, unknown>, schema: Record<string, Record<string, SchemaEntry>>, isRoot: boolean = false) {
   const tableSchema = schema[tableName] || {};
   const validFields = Object.keys(tableSchema);
+  const hasCount = Boolean(nodeInput._count);
 
   for (const [key, value] of Object.entries(nodeInput)) {
     if (key === "where") {
@@ -42,15 +35,21 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
         }
       }
     } else if (key === "limit" || key === "orderBy") {
-       continue;
-    } else if (key === "count") {
+       if (hasCount) {
+        throw new Error("Kadak Error: _count can only coexist with select and where");
+      }
+      continue;
+    } else if (key === "_count") {
       if (value !== true) {
-        throw new Error("Kadak Error: count must be true");
+        throw new Error("Kadak Error: _count must be true");
       }
       if (!isRoot) {
-        throw new Error("Kadak Error: count is only supported at the root level");
+        continue;
       }
     } else if (key === "take") {
+      if (hasCount) {
+        throw new Error("Kadak Error: _count can only coexist with select and where");
+      }
       if (!isRoot) {
         throw new Error("Kadak Error: nested pagination is not supported yet");
       }
@@ -58,6 +57,9 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
         throw new Error("Kadak Error: 'take' must be > 0");
       }
     } else if (key === "skip") {
+      if (hasCount) {
+        throw new Error("Kadak Error: _count can only coexist with select and where");
+      }
       if (!isRoot) {
         throw new Error("Kadak Error: nested pagination is not supported yet");
       }
@@ -71,6 +73,12 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
           throw new Error(`Kadak Error: invalid field '${field}' on '${tableName}'`);
         }
       }
+    } else if (hasCount) {
+      throw new Error("Kadak Error: _count can only coexist with select and where");
+    } else if (key === "_count") {
+      if (value !== true) {
+        throw new Error("Kadak Error: _count must be true");
+      }
     } else {
       // It's a relation
       const target = tableSchema[key];
@@ -80,6 +88,13 @@ function validateNode(tableName: string, nodeInput: Record<string, unknown>, sch
       }
 
       if (typeof value === "object" && value !== null) {
+        const relationObj = value as Record<string, unknown>;
+        if (relationObj._count === true) {
+          const keys = Object.keys(relationObj).filter((k) => k !== "_count");
+          if (keys.length > 0) {
+            throw new Error("Kadak Error: _count cannot be combined with fields or nested relations");
+          }
+        }
         if (typeof target === "object" && target !== null && "table" in target) {
           validateNode((target as { table: string }).table, value as Record<string, unknown>, schema, false);
         } else if (typeof target === "string") {

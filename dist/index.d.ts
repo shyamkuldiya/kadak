@@ -108,6 +108,7 @@ type Predicate = {
 };
 type RelationAST = {
     name: string;
+    _count?: boolean;
     select?: Record<string, true>;
     relations: RelationAST[];
 };
@@ -117,7 +118,7 @@ type OrderBy = {
 };
 type QueryAST = {
     root: string;
-    count?: boolean;
+    _count?: boolean;
     select?: Record<string, true>;
     take?: number;
     skip?: number;
@@ -262,10 +263,12 @@ type QueryNode<S extends SchemaMap, D extends Record<string, Record<string, stri
     orderBy?: OrderByInput<S[TableName]>;
     select?: SelectInput<S[TableName]>;
 } & {
-    [R in keyof D[TableName] & string]?: D[TableName][R] extends keyof S ? QueryNode<S, D, D[TableName][R]> | true : never;
+    [R in keyof D[TableName] & string]?: D[TableName][R] extends keyof S ? (QueryNode<S, D, D[TableName][R]> & {
+        _count?: true;
+    }) | true : never;
 };
 type RootNode<S extends SchemaMap, D extends Record<string, Record<string, string>>, TableName extends keyof S & keyof D> = QueryNode<S, D, TableName> & {
-    count?: true;
+    _count?: true;
     take?: number;
     skip?: number;
 };
@@ -303,11 +306,20 @@ type ColumnSelection<Columns, Selection> = Selection extends Record<string, true
 } : {
     [K in keyof Columns]: ColumnValue<Columns[K]>;
 };
+type RelationCountSelection<Node> = Node extends {
+    _count: true;
+} ? {
+    _count: number;
+} : {};
 type RowResult<S extends SchemaMap, D extends Record<string, Record<string, string>>, TableName extends keyof S & keyof D, Node> = ColumnSelection<S[TableName], Node extends {
     select: infer Sel;
-} ? Sel : never> & RelationMapResult<S, D, TableName, Node>;
+} ? Sel : never> & RelationCountSelection<Node> & RelationMapResult<S, D, TableName, Node>;
 type RelationMapResult<S extends SchemaMap, D extends Record<string, Record<string, string>>, TableName extends keyof S & keyof D, Node> = Node extends Record<string, unknown> ? {
-    [R in keyof D[TableName] & string as R extends keyof Node ? R : never]: D[TableName][R] extends keyof S ? Node[R] extends true ? RowResult<S, D, D[TableName][R], true> : RowResult<S, D, D[TableName][R], Node[R]> : never;
+    [R in keyof D[TableName] & string as R extends keyof Node ? R : never]: D[TableName][R] extends keyof S ? Node[R] extends {
+        _count: true;
+    } ? {
+        _count: number;
+    } : Node[R] extends true ? RowResult<S, D, D[TableName][R], true> : RowResult<S, D, D[TableName][R], Node[R]> : never;
 } : {};
 type QueryResult<S extends SchemaMap, D extends Record<string, Record<string, string>>, Q extends InferredQuery<S, D>> = {
     [K in keyof Q & keyof S & keyof D]: Array<RowResult<S, D, K, Q[K]>>;
@@ -320,9 +332,11 @@ interface KadakInstance<S extends SchemaMap = SchemaMap, D extends Record<string
         debug?: boolean;
         client?: pg.PoolClient;
     }): KadakQuery<Q[keyof Q & keyof S & keyof D] extends {
-        count: true;
+        _count: true;
     } ? {
-        count: number;
+        [K in keyof Q & keyof S & keyof D]: {
+            _count: number;
+        };
     } : QueryResult<S, D, Q>>;
     insert<T extends keyof S & string>(table: T, data: TableInsert<S, T>, options?: {
         client?: pg.PoolClient;

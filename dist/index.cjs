@@ -49,10 +49,10 @@ module.exports = __toCommonJS(index_exports);
 function buildAST(queryInput) {
   const rootKey = Object.keys(queryInput)[0];
   const rootValue = queryInput[rootKey];
-  const { where, relations, orderBy, select, take, skip, count } = parseNode(rootValue, true);
+  const { where, relations, orderBy, select, take, skip, _count } = parseNode(rootValue, true);
   return {
     root: rootKey,
-    count,
+    _count,
     select,
     take,
     skip,
@@ -68,7 +68,7 @@ function parseNode(input, isRoot) {
   let select;
   let take;
   let skip;
-  let count;
+  let _count;
   for (const [key, value] of Object.entries(input)) {
     if (key === "where") {
       const whereObj = value;
@@ -81,50 +81,44 @@ function parseNode(input, isRoot) {
       const direction = orderObj[field].toLowerCase();
       orderBy = { field, direction };
     } else if (key === "select") {
-      if (input.count) {
-        throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
-      }
       select = {};
       for (const [field, enabled] of Object.entries(value)) {
         if (enabled) select[field] = true;
       }
-    } else if (key === "count") {
-      count = Boolean(value);
-      if (count) {
-        if (Object.keys(input).some((k) => !["count", "where"].includes(k))) {
-          throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
-        }
-      }
+    } else if (key === "_count") {
+      _count = Boolean(value);
     } else if (key === "take") {
       if (!isRoot) {
         throw new Error("Kadak Error: nested pagination is not supported yet");
-      }
-      if (input.count) {
-        throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
       }
       take = Number(value);
     } else if (key === "skip") {
       if (!isRoot) {
         throw new Error("Kadak Error: nested pagination is not supported yet");
       }
-      if (input.count) {
-        throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
-      }
       skip = Number(value);
     } else if (value === true || typeof value === "object" && value !== null) {
-      if (input.count) {
-        throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
-      }
       const relationInput = value === true ? {} : value;
+      const relationCount = relationInput._count === true;
+      if (relationCount) {
+        const nestedKeys = Object.keys(relationInput).filter((k) => k !== "_count");
+        if (nestedKeys.length > 0) {
+          throw new Error("Kadak Error: _count cannot be combined with fields or nested relations");
+        }
+      }
+      if (_count) {
+        throw new Error("Kadak Error: _count cannot be mixed with relations");
+      }
       const { relations: nestedRelations, select: nestedSelect } = parseNode(relationInput, false);
       relations.push({
         name: key,
+        _count: relationCount,
         select: nestedSelect,
         relations: nestedRelations
       });
     }
   }
-  return { where, relations, orderBy, select, take, skip, count };
+  return { where, relations, orderBy, select, take, skip, _count };
 }
 
 // src/query/planner.ts
@@ -170,8 +164,8 @@ function findTable(id, plan) {
 function compileSQL(plan, ast, schema) {
   const values = [];
   const selections = [];
-  if (ast.count) {
-    let sql2 = `SELECT COUNT(*) AS "count" FROM ${plan.from}
+  if (ast._count) {
+    let sql2 = `SELECT COUNT(*) AS "_count" FROM ${plan.from}
 `;
     if (plan.where && plan.where.length > 0) {
       const whereClauses = plan.where.map((p) => {
@@ -204,9 +198,17 @@ function compileSQL(plan, ast, schema) {
   const walkRelations = (tableName, relations) => {
     for (const rel of relations) {
       const mapping = schema[tableName]?.[rel.name];
-      if (!mapping || typeof mapping !== "object" || !("table" in mapping)) continue;
-      const relation = mapping;
+      if (!mapping) continue;
+      const relation = typeof mapping === "string" ? { table: mapping.split(".")[0], as: rel.name, to: mapping.split(".")[1] || "id", source: "id" } : mapping;
       const alias = relation.as !== relation.table ? relation.as : void 0;
+      if (rel._count) {
+        selections.push(`(
+    SELECT COUNT(*)
+    FROM ${relation.table}
+    WHERE ${relation.table}."${relation.to}" = ${plan.from}."${relation.source}"
+  ) AS "${rel.name}__count"`);
+        continue;
+      }
       addTableColumns(relation.table, alias, rel.select);
       walkRelations(relation.table, rel.relations);
     }
@@ -216,6 +218,10 @@ function compileSQL(plan, ast, schema) {
   let sql = `SELECT ${selections.join(", ")} FROM ${plan.from}
 `;
   for (const join of plan.joins) {
+    const rootRelation = ast.relations.find((rel) => rel.name === (join.alias || join.table));
+    if (rootRelation && rootRelation._count) {
+      continue;
+    }
     const aliasStr = join.alias ? ` ${join.alias}` : "";
     const [onLeft, onRight] = join.on.map((part) => {
       const [table, field] = part.split(".");
@@ -314,6 +320,12 @@ function processRelations(parentTable, parentObj, row, relations, schema) {
     const targetTable = relation.table;
     const targetField = relation.to;
     const isOneToMany = targetField !== "id";
+    if (rel._count) {
+      const countKey = `${rel.name}__count`;
+      const countValue = row[countKey];
+      parentObj[rel.name] = { _count: typeof countValue === "string" ? Number(countValue) : Number(countValue ?? 0) };
+      continue;
+    }
     const prefix = `${rel.name}_`;
     const relId = row[`${prefix}id`];
     if (relId === null || relId === void 0) {
@@ -410,14 +422,6 @@ function validateInput(input, schema) {
     throw new Error(`\u274C Kadak Error: Table '${rootTable}' not found. ${suggestions}`);
   }
   const rootNode = input[rootTable];
-  const hasCount = Object.prototype.hasOwnProperty.call(rootNode, "count") && Boolean(rootNode.count);
-  if (hasCount) {
-    for (const key of Object.keys(rootNode)) {
-      if (!["count", "where"].includes(key)) {
-        throw new Error("Kadak Error: count cannot be mixed with select, relations, or ordering");
-      }
-    }
-  }
   const hasPagination = Object.prototype.hasOwnProperty.call(rootNode, "take") || Object.prototype.hasOwnProperty.call(rootNode, "skip");
   if (hasPagination && !Object.prototype.hasOwnProperty.call(rootNode, "orderBy")) {
     throw new Error("Kadak Error: orderBy is required when using pagination");
@@ -427,6 +431,7 @@ function validateInput(input, schema) {
 function validateNode(tableName, nodeInput, schema, isRoot = false) {
   const tableSchema = schema[tableName] || {};
   const validFields = Object.keys(tableSchema);
+  const hasCount = Boolean(nodeInput._count);
   for (const [key, value] of Object.entries(nodeInput)) {
     if (key === "where") {
       const whereObj = value;
@@ -437,15 +442,21 @@ function validateNode(tableName, nodeInput, schema, isRoot = false) {
         }
       }
     } else if (key === "limit" || key === "orderBy") {
+      if (hasCount) {
+        throw new Error("Kadak Error: _count can only coexist with select and where");
+      }
       continue;
-    } else if (key === "count") {
+    } else if (key === "_count") {
       if (value !== true) {
-        throw new Error("Kadak Error: count must be true");
+        throw new Error("Kadak Error: _count must be true");
       }
       if (!isRoot) {
-        throw new Error("Kadak Error: count is only supported at the root level");
+        continue;
       }
     } else if (key === "take") {
+      if (hasCount) {
+        throw new Error("Kadak Error: _count can only coexist with select and where");
+      }
       if (!isRoot) {
         throw new Error("Kadak Error: nested pagination is not supported yet");
       }
@@ -453,6 +464,9 @@ function validateNode(tableName, nodeInput, schema, isRoot = false) {
         throw new Error("Kadak Error: 'take' must be > 0");
       }
     } else if (key === "skip") {
+      if (hasCount) {
+        throw new Error("Kadak Error: _count can only coexist with select and where");
+      }
       if (!isRoot) {
         throw new Error("Kadak Error: nested pagination is not supported yet");
       }
@@ -466,6 +480,12 @@ function validateNode(tableName, nodeInput, schema, isRoot = false) {
           throw new Error(`Kadak Error: invalid field '${field}' on '${tableName}'`);
         }
       }
+    } else if (hasCount) {
+      throw new Error("Kadak Error: _count can only coexist with select and where");
+    } else if (key === "_count") {
+      if (value !== true) {
+        throw new Error("Kadak Error: _count must be true");
+      }
     } else {
       const target = tableSchema[key];
       if (!target) {
@@ -473,6 +493,13 @@ function validateNode(tableName, nodeInput, schema, isRoot = false) {
         throw new Error(`\u274C Kadak Error: Relation '${key}' not found on table '${tableName}'. ${suggestions}`);
       }
       if (typeof value === "object" && value !== null) {
+        const relationObj = value;
+        if (relationObj._count === true) {
+          const keys = Object.keys(relationObj).filter((k) => k !== "_count");
+          if (keys.length > 0) {
+            throw new Error("Kadak Error: _count cannot be combined with fields or nested relations");
+          }
+        }
         if (typeof target === "object" && target !== null && "table" in target) {
           validateNode(target.table, value, schema, false);
         } else if (typeof target === "string") {
@@ -737,10 +764,11 @@ var kadak = ((config) => {
         if (options.debug) console.error("\u274C Kadak Execution Error:", e.message);
         rows = [];
       }
-      if (ast.count) {
-        const raw = rows[0]?.count ?? rows[0]?.count_star ?? rows[0]?.count;
+      if (ast._count) {
+        const raw = rows[0]?._count ?? rows[0]?.count ?? rows[0]?.count_star;
         const countValue = typeof raw === "string" ? Number(raw) : Number(raw ?? 0);
-        return options.debug ? { sql, values, rows, data: { count: countValue } } : { count: countValue };
+        const countResult = { [ast.root]: { _count: countValue } };
+        return options.debug ? { sql, values, rows, data: countResult } : countResult;
       }
       const normalized = normalize(rows, ast, _currentSchema);
       return options.debug ? { sql, values, rows, data: normalized } : normalized;

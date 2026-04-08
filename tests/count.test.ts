@@ -14,34 +14,48 @@ describe("count support", () => {
   it("builds root count SQL", () => {
     const q = dbClient.data({
       posts: {
-        count: true
+        _count: true
       }
     });
 
-    expect(q.toSQL().sql).toContain("SELECT COUNT(*) AS \"count\" FROM posts");
+    expect(q.toSQL().sql).toContain("SELECT COUNT(*) AS \"_count\" FROM posts");
   });
 
   it("respects where in count SQL", () => {
     const q = dbClient.data({
       posts: {
-        count: true,
+        _count: true,
         where: { title: "Hello" }
       }
     });
 
     const sql = q.toSQL().sql;
-    expect(sql).toContain("SELECT COUNT(*) AS \"count\" FROM posts");
+    expect(sql).toContain("SELECT COUNT(*) AS \"_count\" FROM posts");
     expect(sql).toContain('WHERE posts."title" = $1');
   });
 
-  it("throws when count is mixed with select", () => {
-    expect(() => dbClient.data({
+  it("allows _count to coexist with select", () => {
+    const q = dbClient.data({
       posts: {
-        count: true,
+        _count: true,
         select: {
           title: true
         }
       }
-    })).toThrow("Kadak Error: count cannot be mixed with select, relations, or ordering");
+    });
+
+    expect(q.toSQL().sql).toContain("SELECT COUNT(*) AS \"_count\" FROM posts");
+  });
+
+  it("returns root keyed _count shape", async () => {
+    const q = dbClient.data({
+      posts: {
+        _count: true
+      }
+    });
+
+    const result = await q;
+    expect(result).toHaveProperty("posts");
+    expect(result.posts).toHaveProperty("_count");
   });
 });

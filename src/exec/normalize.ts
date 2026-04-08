@@ -68,6 +68,13 @@ function processRelations(
     const targetField = relation.to;
     const isOneToMany = targetField !== "id";
 
+    if (rel._count) {
+      const countKey = `${rel.name}__count`;
+      const countValue = row[countKey];
+      parentObj[rel.name] = { _count: typeof countValue === "string" ? Number(countValue) : Number(countValue ?? 0) };
+      continue;
+    }
+
     const prefix = `${rel.name}_`;
     const relId = row[`${prefix}id`];
 

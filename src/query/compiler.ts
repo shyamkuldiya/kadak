@@ -12,8 +12,8 @@ export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Rec
   const values: unknown[] = [];
   const selections: string[] = [];
 
-  if (ast.count) {
-    let sql = `SELECT COUNT(*) AS "count" FROM ${plan.from}\n`;
+  if (ast._count) {
+    let sql = `SELECT COUNT(*) AS "_count" FROM ${plan.from}\n`;
 
     if (plan.where && plan.where.length > 0) {
       const whereClauses = plan.where.map(p => {
@@ -50,9 +50,19 @@ export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Rec
   const walkRelations = (tableName: string, relations: RelationAST[]) => {
     for (const rel of relations) {
       const mapping = schema[tableName]?.[rel.name];
-      if (!mapping || typeof mapping !== "object" || !("table" in mapping)) continue;
-      const relation = mapping as { table: string; as: string };
+      if (!mapping) continue;
+      const relation = typeof mapping === "string"
+        ? { table: mapping.split(".")[0], as: rel.name, to: mapping.split(".")[1] || "id", source: "id" }
+        : (mapping as { table: string; as: string; to: string; source: string });
       const alias = relation.as !== relation.table ? relation.as : undefined;
+      if (rel._count) {
+        selections.push(`(
+    SELECT COUNT(*)
+    FROM ${relation.table}
+    WHERE ${relation.table}."${relation.to}" = ${plan.from}."${relation.source}"
+  ) AS "${rel.name}__count"`);
+        continue;
+      }
       addTableColumns(relation.table, alias, rel.select);
       walkRelations(relation.table, rel.relations);
     }
@@ -65,6 +75,10 @@ export function compileSQL(plan: Plan, ast: QueryAST, schema: Record<string, Rec
   let sql = `SELECT ${selections.join(", ")} FROM ${plan.from}\n`;
 
   for (const join of plan.joins) {
+    const rootRelation = ast.relations.find((rel) => rel.name === (join.alias || join.table));
+    if (rootRelation && rootRelation._count) {
+      continue;
+    }
     const aliasStr = join.alias ? ` ${join.alias}` : "";
     const [onLeft, onRight] = join.on.map(part => {
       const [table, field] = part.split(".");

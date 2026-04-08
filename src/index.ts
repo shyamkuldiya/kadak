@@ -80,12 +80,12 @@ type QueryNode<S extends SchemaMap, D extends Record<string, Record<string, stri
   select?: SelectInput<S[TableName]>;
 } & {
   [R in keyof D[TableName] & string]?: D[TableName][R] extends keyof S
-    ? QueryNode<S, D, D[TableName][R]> | true
+    ? (QueryNode<S, D, D[TableName][R]> & { _count?: true }) | true
     : never;
 };
 
 type RootNode<S extends SchemaMap, D extends Record<string, Record<string, string>>, TableName extends keyof S & keyof D> = QueryNode<S, D, TableName> & {
-  count?: true;
+  _count?: true;
   take?: number;
   skip?: number;
 };
@@ -124,15 +124,20 @@ type ColumnSelection<Columns, Selection> = Selection extends Record<string, true
       [K in keyof Columns]: ColumnValue<Columns[K]>;
     };
 
+type RelationCountSelection<Node> = Node extends { _count: true } ? { _count: number } : {};
+
 type RowResult<S extends SchemaMap, D extends Record<string, Record<string, string>>, TableName extends keyof S & keyof D, Node> =
   ColumnSelection<S[TableName], Node extends { select: infer Sel } ? Sel : never> &
+  RelationCountSelection<Node> &
   RelationMapResult<S, D, TableName, Node>;
 
 type RelationMapResult<S extends SchemaMap, D extends Record<string, Record<string, string>>, TableName extends keyof S & keyof D, Node> = Node extends Record<string, unknown>
   ? {
       [R in keyof D[TableName] & string as R extends keyof Node ? R : never]:
         D[TableName][R] extends keyof S
-          ? Node[R] extends true
+          ? Node[R] extends { _count: true }
+            ? { _count: number }
+            : Node[R] extends true
             ? RowResult<S, D, D[TableName][R], true>
             : RowResult<S, D, D[TableName][R], Node[R]>
           : never;
@@ -142,10 +147,6 @@ type RelationMapResult<S extends SchemaMap, D extends Record<string, Record<stri
 type QueryResult<S extends SchemaMap, D extends Record<string, Record<string, string>>, Q extends InferredQuery<S, D>> = {
   [K in keyof Q & keyof S & keyof D]: Array<RowResult<S, D, K, Q[K]>>;
 };
-
-type CountQueryResult<S extends SchemaMap, D extends Record<string, Record<string, string>>, Q extends InferredQuery<S, D>> = Q[keyof Q & keyof S & keyof D] extends { count: true }
-  ? { count: number }
-  : never;
 
 type RelationDefinition = {
   table: string;
@@ -160,7 +161,7 @@ export interface KadakInstance<S extends SchemaMap = SchemaMap, D extends Record
   readonly schema: Readonly<SchemaDefinition>;
   define<Tables extends Record<string, Table<string, Record<string, ColumnInput>>>>(tables: Tables): KadakInstance<DefinedSchema<Tables>, RelationGraph<Tables>>;
   push(): Promise<void>;
-  data<Q extends InferredQuery<S, D>>(input: Q, options?: { debug?: boolean; client?: pg.PoolClient }): KadakQuery<Q[keyof Q & keyof S & keyof D] extends { count: true } ? { count: number } : QueryResult<S, D, Q>>;
+  data<Q extends InferredQuery<S, D>>(input: Q, options?: { debug?: boolean; client?: pg.PoolClient }): KadakQuery<Q[keyof Q & keyof S & keyof D] extends { _count: true } ? { [K in keyof Q & keyof S & keyof D]: { _count: number } } : QueryResult<S, D, Q>>;
   insert<T extends keyof S & string>(table: T, data: TableInsert<S, T>, options?: { client?: pg.PoolClient }): Promise<unknown>;
   update<T extends keyof S & string>(table: T, options: TableUpdate<S, T> & { client?: pg.PoolClient }): Promise<unknown[]>;
   delete<T extends keyof S & string>(table: T, options: TableDelete<S, T> & { client?: pg.PoolClient }): Promise<unknown[]>;
@@ -195,10 +196,11 @@ export const kadak = ((config: KadakConfig): KadakInstance => {
         if (options.debug) console.error("❌ Kadak Execution Error:", (e as Error).message);
         rows = [];
       }
-      if (ast.count) {
-        const raw = rows[0]?.count ?? rows[0]?.count_star ?? rows[0]?.count;
+      if (ast._count) {
+        const raw = rows[0]?._count ?? rows[0]?.count ?? rows[0]?.count_star;
         const countValue = typeof raw === "string" ? Number(raw) : Number(raw ?? 0);
-        return (options.debug ? { sql, values, rows, data: { count: countValue } } : { count: countValue }) as unknown;
+        const countResult = { [ast.root]: { _count: countValue } };
+        return (options.debug ? { sql, values, rows, data: countResult } : countResult) as unknown;
       }
       const normalized = normalize(rows, ast, _currentSchema);
       return (options.debug ? { sql, values, rows, data: normalized } : normalized) as unknown;
