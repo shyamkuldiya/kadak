@@ -151,8 +151,10 @@ async function fetchBatch(
 
 function buildExecutionPlan(ast: QueryAST, schema: Schema): ExecutionPlan {
   const edges: ExecutionEdge[] = [];
+  const queue: Array<{ tableName: string; relations: RelationAST[] }> = [{ tableName: ast.root, relations: ast.relations }];
 
-  const walk = (tableName: string, relations: RelationAST[]) => {
+  while (queue.length > 0) {
+    const { tableName, relations } = queue.shift()!;
     const tableSchema = schema[tableName] || {};
     for (const rel of relations) {
       const relation = getRelation(tableSchema, rel.name);
@@ -168,11 +170,11 @@ function buildExecutionPlan(ast: QueryAST, schema: Schema): ExecutionPlan {
         _count: rel._count,
         relations: rel.relations
       });
-      walk(childTable, rel.relations);
+      if (rel.relations.length > 0) {
+        queue.push({ tableName: childTable, relations: rel.relations });
+      }
     }
-  };
-
-  walk(ast.root, ast.relations);
+  }
 
   return {
     root: ast.root,

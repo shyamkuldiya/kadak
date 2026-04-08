@@ -458,7 +458,9 @@ async function fetchBatch(table, field, values, schema, select, client, cache) {
 }
 function buildExecutionPlan(ast, schema) {
   const edges = [];
-  const walk = (tableName, relations) => {
+  const queue = [{ tableName: ast.root, relations: ast.relations }];
+  while (queue.length > 0) {
+    const { tableName, relations } = queue.shift();
     const tableSchema = schema[tableName] || {};
     for (const rel of relations) {
       const relation = getRelation(tableSchema, rel.name);
@@ -474,10 +476,11 @@ function buildExecutionPlan(ast, schema) {
         _count: rel._count,
         relations: rel.relations
       });
-      walk(childTable, rel.relations);
+      if (rel.relations.length > 0) {
+        queue.push({ tableName: childTable, relations: rel.relations });
+      }
     }
-  };
-  walk(ast.root, ast.relations);
+  }
   return {
     root: ast.root,
     edges
