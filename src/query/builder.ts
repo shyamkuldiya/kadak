@@ -7,11 +7,13 @@ export function buildAST(queryInput: Record<string, unknown>): QueryAST {
   const { where, relations, orderBy, select, take, skip, _count } = parseNode(rootValue, true);
   const shapeKey = buildShapeKey(rootKey, rootValue);
   const rootSelectKeys = rootValue.select ? Object.keys(rootValue.select as Record<string, unknown>).filter((key) => key !== "id") : undefined;
+  const rootSelectSignature = rootSelectKeys ? rootSelectKeys.slice().sort().join(",") : "";
   
   return {
     root: rootKey,
     shapeKey,
     rootSelectKeys,
+    rootSelectSignature,
     _count,
     select,
     take,

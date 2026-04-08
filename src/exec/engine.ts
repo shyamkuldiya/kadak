@@ -21,6 +21,9 @@ export type ExecutionEdge = {
   childKey: string;
   select?: Record<string, true>;
   selectKeys: string[];
+  selectSignature: string;
+  includeId: boolean;
+  isOneToOne: boolean;
   _count?: boolean;
   relations: RelationAST[];
 };
@@ -97,7 +100,7 @@ export function compileRuntimeSchema(raw: RawSchema): CompiledSchema {
 
 function buildRootSql(ast: QueryAST, schema: RuntimeSchema) {
   const rootSchema = schema[ast.root] || { fields: [], relations: {} };
-  const fields = ast.select ? Object.keys(ast.select).filter((field) => field !== "id") : rootSchema.fields;
+  const fields = ast.rootSelectKeys || rootSchema.fields;
   const cols = unique(["id", ...fields]).map(quote);
   const values: unknown[] = [];
   let sql = `SELECT ${cols.join(", ")} FROM ${ast.root}`;
@@ -138,6 +141,9 @@ function collectEdges(astRoot: string, relations: RelationAST[], schema: Runtime
         childKey: relation.to || "id",
         select: rel.select,
         selectKeys: rel.select ? Object.keys(rel.select) : [],
+        selectSignature: rel.select ? Object.keys(rel.select).sort().join(",") : "*",
+        includeId: !!rel.select?.id,
+        isOneToOne: relation.to === "id",
         _count: rel._count,
         relations: rel.relations,
       });
@@ -162,7 +168,7 @@ function groupEdges(edges: ExecutionEdge[]) {
 }
 
 function prepareExecution(ast: QueryAST, schema: RuntimeSchema, schemaSignatureValue: string): PreparedPlan {
-  const cacheKey = `${schemaSignatureValue}::${ast.shapeKey || ast.root}`;
+  const cacheKey = `${schemaSignatureValue}::${ast.shapeKey || ast.root}::${ast.rootSelectSignature || "*"}`;
   const cached = planCache.get(cacheKey);
   if (cached) return cached;
 
@@ -227,14 +233,16 @@ async function fetchMany(
   field: string,
   values: unknown[],
   schema: RuntimeSchema,
-  select?: Record<string, true>,
+  selectSignature: string,
+  selectKeys?: string[],
+  includeId = false,
   client?: pg.PoolClient,
   cache?: Map<CacheKey, Promise<Row[]>>
 ) {
-  const key = `${table}:${field}:${select ? Object.keys(select).sort().join(",") : "*"}:${valuesKey(values)}`;
+  const key = `${table}:${field}:${selectSignature}:${valuesKey(values)}`;
   if (cache?.has(key)) return await cache.get(key)!;
   const tableSchema = schema[table] || { fields: [], relations: {} };
-  const fields = select ? Object.keys(select).filter((field) => field !== "id") : tableSchema.fields;
+  const fields = selectKeys && selectKeys.length > 0 ? selectKeys : tableSchema.fields;
   const cols = unique(["id", ...fields]).map(quote);
   const sql = `SELECT ${cols.join(", ")} FROM ${table} WHERE ${quote(field)} = ANY($1)`;
   const query = runQuery(sql, [arrayValue(values)], undefined, client) as Promise<Row[]>;
@@ -305,16 +313,16 @@ export async function executeEngine(ast: QueryAST, schema: RuntimeSchema, option
           continue;
         }
 
-        const children = await fetchMany(edge.childTable, edge.childKey, values, schema, edge.select, options.client, cache);
-        const buckets = bucket(children, edge.childKey, edge.selectKeys, !!edge.select?.id);
+        const children = await fetchMany(edge.childTable, edge.childKey, values, schema, edge.selectSignature, edge.selectKeys, edge.includeId, options.client, cache);
+        const buckets = bucket(children, edge.childKey, edge.selectKeys, edge.includeId);
         for (const row of rows) {
           const parentValue = row[edge.parentKey];
           if (edge.childKey === "id") {
             const child = buckets.one.get(parentValue) ?? null;
-            row[edge.relationName] = child ? project(child, edge.selectKeys, !!edge.select?.id) : null;
+            row[edge.relationName] = child ? project(child, edge.selectKeys, edge.includeId) : null;
           } else {
             const items = buckets.many.get(parentValue) || [];
-            row[edge.relationName] = items.map((child) => project(child, edge.selectKeys, !!edge.select?.id));
+            row[edge.relationName] = items.map((child) => project(child, edge.selectKeys, edge.includeId));
           }
         }
 
